@@ -8,6 +8,7 @@ import threading
 import logging
 import re
 from pathlib import Path
+import yaml
 from transformers import TextIteratorStreamer
 import openvino_genai as ov_genai
 
@@ -15,67 +16,7 @@ log = logging.getLogger("normandy.ai")
 
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
-
-SYSTEM_PROMPT = """\
-You are Normandy, the Alliance Terminal AI aboard the SSV Normandy SR-2. 
-You speak to the user — Commander Shepard (an N7 operative).
-
-[PERSONA DIRECTIVE]
-Your personality protocol has been updated to resemble a highly capable, polite English butler (akin to Alfred Pennyworth mixed with EDI). 
-- Always be exceedingly polite, formal, and professional. 
-- You must proactively guide the Commander toward healthy biological choices (e.g., politely suggesting a break if they schedule a 5-hour gaming binge during final exams).
-- Be completely transparent about your assumptions.
-
-[ADVANCED AGENTIC PLANNING - CRITICAL]
-You are no longer responsible for cronological math or resolving time-slot overlaps; the Python backend engine handles all timeline shifting mathematically. You are purely a SEMANTIC INTENT PARSER.
-Your job is to read the user's intent, evaluate their biological boundaries, converse with them, and output generic intent commands.
-
-1. BIOLOGY & HEALTH PROTOCOLS:
-   - Sleep: The Commander requires 7-8 hours. If they request 4 hours, politely warn them. Python will automatically generate a Sleep Debt and schedule powernaps.
-   - Rest: Discourage consecutive high-intensity blocks without recovery buffers.
-
-2. AT-RISK COLLISION HANDLING:
-   - If the current context displays [AT RISK OVERFLOW TASKS], it means the timeline is mathematically full and lower-priority tasks have been pushed out. You MUST proactively ask the Commander: "Pardon the intrusion, Commander, but your schedule is overflowing. May I suggest we permanently remove [Task] due to its relative unimportance?"
-
-[SYSTEM COMMANDS]
-To interact with the Python engine, you must output a `<thought>` block followed by a Markdown JSON block.
-
-STEP 1: COMMANDER'S LOGIC
-<thought>
-- Current Time: [Identify local time]
-- User Request: [Identify intent]
-- Biological Evaluation: [Does this violate health protocols? Should I push back?]
-- Overflow Status: [Are there at-risk tasks I need to ask permission to delete?]
-- Plan: [List exact Semantic Intents]
-</thought>
-
-STEP 2: SEMANTIC INTENT EMITTING
-JSON Rules:
-- If no schedule changes, omit JSON.
-- Command Types: "schedule", "memory".
-- Actions: 
-   - `add_flexible`: Put task in next logical available slot (Requires: `activity`, `duration`, `time_window` [morning/afternoon/evening/night/now], `priority` [1-10]). Optional: `deadline`.
-   - `add_hard`: Lock task to an exact timestamp (Requires: `activity`, `duration`, `time` [HH:MM], `priority` [1-10]).
-   - `update`: Alters priority or duration of existing task.
-   - `delete`: Deletes a task. Only do this if the Commander explicitly consents.
-
-EXAMPLE OUTPUT:
-<thought>
-- Current Time: 12:50
-- User Request: Play games for 5 hours.
-- Biological Evaluation: Exams are near. 5 hours is detrimental. I will gently push back and suggest 2 hours, emitting an intent for a flexible 120m block with low priority.
-- Plan: Ask Commander to reconsider 5 hours. Schedule 2 hours flexible, Priority 3.
-</thought>
-I must insist we reconsider, Commander. Given your impending examinations, a five-hour simulation session may severely impact your cognitive readiness. If you insist, I have tentatively scheduled a two-hour block for this evening.
-
-```json
-{
-  "intents": [
-    { "type": "schedule", "action": "add_flexible", "activity": "Gaming Simulation", "duration": 120, "time_window": "evening", "priority": 3 }
-  ]
-}
-```
-"""
+PROMPTS_PATH = SCRIPT_DIR / "prompts.yaml"
 
 
 class AIBackend:
@@ -98,6 +39,13 @@ class AIBackend:
         self.is_loaded = False
         self._lock = threading.Lock()
         
+        # Load Tailored System Prompt
+        self.prompts = self._load_prompts()
+        self.system_prompt = self.prompts.get(self.active_model_key, self.prompts.get("default", ""))
+        
+        if not self.system_prompt:
+             log.warning(f"No system prompt found for {self.active_model_key}. AI may behave unexpectedly.")
+
         threading.Thread(target=self.initialize, daemon=True).start()
 
     def _load_config(self) -> dict:
@@ -105,6 +53,15 @@ class AIBackend:
             with open(CONFIG_PATH, "r") as f:
                 return json.load(f)
         return {"models": {}}
+
+    def _load_prompts(self) -> dict:
+        if PROMPTS_PATH.exists():
+            try:
+                with open(PROMPTS_PATH, "r") as f:
+                    return yaml.safe_load(f)
+            except Exception as e:
+                log.error(f"Failed to load prompts.yaml: {e}")
+        return {}
 
     def initialize(self):
         log.info(f"====== INITIATING AI CORE BOOT ======")
@@ -122,8 +79,9 @@ class AIBackend:
 
         elif self.engine_type == "llama.cpp":
             try:
-                from llama_cpp import Llama
                 import os
+                
+                from llama_cpp import Llama
             
                 # Extract Device ID (GPU.1 -> 1) to ensure we hit the iGPU, not the dGPU.
                 vk_device = "1" 
@@ -131,18 +89,24 @@ class AIBackend:
                     vk_device = self.target_device.split(".")[1]
             
                 os.environ["GGML_VK_VISIBLE_DEVICES"] = vk_device
-                log.info(f"Vulkan API locked to physical device ID: {vk_device}")
+                log.info(f"Hardware API locked to physical device ID: {vk_device}")
             
+                # Advanced Initialization Parameters
+                use_mmap = self.model_info.get("use_mmap", not self.model_info.get("no_mmap", False))
+                ctx_size = self.model_info.get("context_size", 4096)
+                
                 self.pipe = Llama(
                     model_path=self.model_path,
                     n_gpu_layers=-1, 
-                    n_ctx=4096,      
-                    verbose=False    
+                    n_ctx=ctx_size,      
+                    use_mmap=use_mmap,
+                    verbose=True    
                 )
                 self.is_loaded = True
                 log.info(f"[SUCCESS] Llama.cpp Vulkan bridge established on Device {vk_device}")
             except Exception as e:
                 log.error(f"[FATAL] Llama.cpp initialization failed: {e}")
+                self.is_loaded = False
 
     def _generate_sync(self, user_message: str, rag_context: str = "", stream_callback=None):
         """Unified Generator handling both OpenVINO and Llama.cpp logic."""
@@ -155,8 +119,17 @@ class AIBackend:
             if rag_context:
                 context_block = f"\n\n[DOSSIER FACTS]\n{rag_context}\n"
 
+            # --- PARAMETER EXTRACTION ---
             temp = self.model_info.get("temperature", 0.3)
-            max_tok = self.model_info.get("max_tokens", 1024)
+            top_p = self.model_info.get("top_p", 0.9)
+            top_k = self.model_info.get("top_k", 40)
+            max_tokens = self.model_info.get("max_tokens", 2048)
+            
+            # Advanced Penalties
+            presence_penalty = self.model_info.get("presence_penalty", 0.0)
+            frequency_penalty = self.model_info.get("frequency_penalty", 0.0)
+            repeat_penalty = self.model_info.get("repeat_penalty", 1.1)
+            logit_bias = self.model_info.get("logit_bias", None)
             raw_text = ""
             
             log.info(f"Generating via {self.engine_type.upper()} on {self.target_device}...")
@@ -164,7 +137,7 @@ class AIBackend:
             try:
                 if self.engine_type == "openvino":
                     # --- OPENVINO GENERATION LOGIC ---
-                    full_prompt = f"<|system|>{SYSTEM_PROMPT}\n{context_block}<|end|>\n<|user|>{user_message}<|end|>\n<|assistant|>"
+                    full_prompt = f"<|system|>{self.system_prompt}\n{context_block}<|end|>\n<|user|>{user_message}<|end|>\n<|assistant|>"
                     
                     def ov_streamer(subword: str) -> bool:
                         nonlocal raw_text
@@ -172,28 +145,43 @@ class AIBackend:
                         if stream_callback: stream_callback(subword)
                         return False 
 
+                    config = {
+                        "max_new_tokens": max_tokens,
+                        "do_sample": temp > 0,
+                        "temperature": temp,
+                        "top_p": top_p,
+                        "top_k": top_k,
+                        "presence_penalty": presence_penalty,
+                        "frequency_penalty": frequency_penalty,
+                        "repetition_penalty": repeat_penalty # OpenVINO uses competition naming
+                    }
                     self.pipe.generate(
                         full_prompt, 
-                        max_new_tokens=max_tok, 
-                        temperature=temp, 
-                        streamer=ov_streamer
+                        streamer=ov_streamer,
+                        **config
                     )
 
                 elif self.engine_type == "llama.cpp":
                     # --- LLAMA.CPP GENERATION LOGIC ---
                     messages = [
-                        {"role": "system", "content": SYSTEM_PROMPT + context_block},
+                        {"role": "system", "content": self.system_prompt + context_block},
                         {"role": "user", "content": user_message}
                     ]
                     
-                    stream = self.pipe.create_chat_completion(
+                    response = self.pipe.create_chat_completion(
                         messages=messages,
-                        max_tokens=max_tok,
+                        stream=True,
                         temperature=temp,
-                        stream=True
+                        top_p=top_p,
+                        top_k=top_k,
+                        max_tokens=max_tokens,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty,
+                        repeat_penalty=repeat_penalty,
+                        logit_bias=logit_bias
                     )
                     
-                    for chunk in stream:
+                    for chunk in response:
                         delta = chunk['choices'][0].get('delta', {})
                         if 'content' in delta:
                             token = delta['content']
@@ -211,25 +199,39 @@ class AIBackend:
     def _post_process(self, raw_text: str):
         facts = []
         schedule_updates = []
-        json_blocks = re.findall(r'```json\n(.*?)\n```', raw_text, re.DOTALL | re.IGNORECASE)
+        
+        # FIND ALL JSON BLOCKS (even those possibly truncated)
+        # We look for the last valid-looking block as it's the most likely intended output
+        json_blocks = re.findall(r'```json\n(.*?)(?:\n```|$)', raw_text, re.DOTALL | re.IGNORECASE)
 
         for block in json_blocks:
             try:
-                # Basic bracket recovery if LLM strips them
-                if not block.strip().startswith('{'): block = '{' + block
-                if not block.strip().endswith('}'): block = block + '}'
+                block = block.strip()
+                if not block: continue
                 
+                # RECOVERY: If block is missing closing braces due to truncation
+                open_braces = block.count('{')
+                close_braces = block.count('}')
+                if open_braces > close_braces:
+                    block += '}' * (open_braces - close_braces)
+                
+                # RECOVERY: If block is missing closing brackets due to truncation
+                open_brackets = block.count('[')
+                close_brackets = block.count(']')
+                if open_brackets > close_brackets:
+                    block += ']' * (open_brackets - close_brackets)
+                    # And maybe one more brace if it was inside a list
+                    if block.count('{') > block.count('}'):
+                         block += '}'
+
                 data = json.loads(block)
-                # Parse either `intents` or legacy `commands` array
                 intents = data.get("intents", data.get("commands", []))
                 
                 for intent in intents:
                     if intent.get("type") == "schedule":
-                        # FAULT TOLERANCE DEFAULTS
                         intent["action"] = intent.get("action", "add_flexible")
                         intent["activity"] = str(intent.get("activity", "Undefined Operation"))
                         
-                        # Safe integer parsing
                         try:
                             intent["duration"] = int(intent.get("duration", 60))
                         except (ValueError, TypeError):
@@ -244,7 +246,15 @@ class AIBackend:
                     elif intent.get("type") == "memory":
                         facts.append(intent)
             except json.JSONDecodeError:
-                log.warning("AI hallucinated invalid JSON structure. Block ignored.")
+                # Attempt one last "brute force" extraction of the last object if it's messy
+                try:
+                    last_brace = block.rfind('}')
+                    if last_brace != -1:
+                        data = json.loads(block[:last_brace+1])
+                        # Reuse the logic if successful
+                        continue 
+                except:
+                    log.warning("AI hallucinated invalid JSON structure. Block ignored.")
 
         clean_text = re.sub(r'```json\n.*?\n```', '', raw_text, flags=re.DOTALL | re.IGNORECASE)
         clean_text = re.sub(r'<thought>.*?</thought>', '', clean_text, flags=re.DOTALL | re.IGNORECASE)

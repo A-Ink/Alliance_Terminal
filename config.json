@@ -1,43 +1,97 @@
 {
-  "active_model": "qwen-2.5-7b",
+  "active_model": "phi-4-mini-ov",
   "models": {
     "phi-4-mini": {
-      "display_name": "Phi-4 Mini (NPU Core)",
+      "display_name": "Phi-4 Mini - Light Core",
       "engine": "openvino",
-      "target_device": "AUTO:NPU,GPU",
+      "target_device": "NPU",
       "hf_model_id": "microsoft/Phi-4-mini-instruct",
       "path": "./model/phi-4-mini-instruct-int4-ov",
       "temperature": 0.5,
-      "max_tokens": 1024
+      "max_tokens": 1024,
+      "context_size": 2048,
+      "top_p": 0.9,
+      "top_k": 40
     },
-    "qwen-3.5-9b": {
-      "display_name": "Qwen 3.5 9B (iGPU Core)",
-      "engine": "llama.cpp",
-      "target_device": "GPU.0",
-      "hf_model_id": "bartowski/Qwen3.5-9B-Instruct-GGUF",
-      "hf_gguf_file": "Qwen3.5-9B-Instruct-Q4_K_M.gguf",
-      "path": "./model/Qwen3.5-9B-Instruct-Q4_K_M.gguf",
-      "temperature": 0.3,
-      "max_tokens": 2048
+    "phi-4-mini-ov": {
+      "display_name": "Phi-4 Mini - Light Core",
+      "engine": "openvino",
+      "target_device": "NPU",
+      "hf_model_id": "bweng/phi-4-mini-instruct-int4-ov-npu",
+      "path": "./model/phi-4-mini-instruct-int4-ov-npu",
+      "temperature": 0.5,
+      "max_tokens": 1024,
+      "context_size": 2048,
+      "top_p": 0.9,
+      "top_k": 40
     },
     "qwen-2.5-7b": {
-      "display_name": "Qwen 2.5 7B (iGPU Core)",
+      "display_name": "Qwen 2.5 7B - Power Core",
       "engine": "openvino",
       "target_device": "GPU.0",
       "hf_model_id": "Qwen/Qwen2.5-7B-Instruct",
       "path": "./model/qwen2.5-7b-instruct-int4-ov",
       "temperature": 0.3,
-      "max_tokens": 4096
+      "max_tokens": 2048,
+      "context_size": 2048,
+      "top_p": 0.9,
+      "top_k": 40
+    },
+    "qwen-3.5-4b": {
+      "display_name": "Qwen 3.5 4B - Intelligent Core",
+      "engine": "llama.cpp",
+      "target_device": "GPU.0",
+      "hf_model_id": "bartowski/Qwen_Qwen3.5-4B-GGUF",
+      "hf_gguf_file": "Qwen_Qwen3.5-4B-Q6_K.gguf",
+      "path": "./model/Qwen_Qwen3.5-4B-Q6_K.gguf",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "context_size": 4096,
+      "top_p": 0.9,
+      "top_k": 40
+    },
+    "qwen-3.5-4b-small": {
+      "display_name": "Qwen 3.5 4B - Small Intelligent Core",
+      "engine": "llama.cpp",
+      "target_device": "GPU.0",
+      "hf_model_id": "bartowski/Qwen_Qwen3.5-4B-GGUF",
+      "hf_gguf_file": "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+      "path": "./model/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "context_size": 4096,
+      "top_p": 0.95,
+      "top_k": 40,
+      "presence_penalty": 1.5,
+      "frequency_penalty": 0.0,
+      "repeat_penalty": 1.1,
+      "no_mmap": false
+    },
+    "gemma-3-4b": {
+      "display_name": "Gemma 3 4B - Multimodal Core",
+      "engine": "llama.cpp",
+      "target_device": "GPU.0",
+      "hf_model_id": "bartowski/gemma-3-4b-it-GGUF",
+      "hf_gguf_file": "gemma-3-4b-it-Q6_K.gguf",
+      "path": "./model/gemma-3-4b-it-Q6_K.gguf",
+      "temperature": 0.3,
+      "max_tokens": 2048,
+      "context_size": 4096,
+      "top_p": 0.9,
+      "top_k": 40
     },
     "llama-3.1-8b": {
-      "display_name": "Llama 3.1 8B (iGPU Core)",
+      "display_name": "Llama 3.1 8B Instruct - dGPU Core",
       "engine": "llama.cpp",
       "target_device": "GPU.0",
       "hf_model_id": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-      "hf_gguf_file": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-      "path": "./model/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "hf_gguf_file": "Meta-Llama-3.1-8B-Instruct-Q6_K.gguf",
+      "path": "./model/Meta-Llama-3.1-8B-Instruct-Q6_K.gguf",
       "temperature": 0.3,
-      "max_tokens": 1024
+      "max_tokens": 1024,
+      "context_size": 4096,
+      "top_p": 0.9,
+      "top_k": 40
     }
   },
   "device_priority": [

@@ -52,19 +52,18 @@ The backend considers holistic human health algorithms natively before attemptin
 - **Python**: `v3.12+`
 
 ### Configuration
-1. **Clone & Setup Virtual Environment**
+1. **Clone the Repository**
    ```bash
    git clone https://github.com/A-Ink/Assistant-v2.git
    cd Assistant-v2
-   python -m venv .venv
-   .\.venv\Scripts\activate
    ```
 
-2. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-   *(Note: The terminal requires `openvino`, `openvino-genai`, `transformers`, and `optimum-intel` securely isolated within the virtual environment).*
+2. **Automated Zero-Touch Deployment**
+   The repository includes an interactive `setup.ps1` PowerShell script built exactly for fresh environments.
+   - Simply right-click **`setup.ps1`** and select **Run with PowerShell**.
+   - It will autonomously map the `venv` virtual environment and pip install all constraints.
+   - It will prompt you interactively: *"Would you like to install the Vulkan Llama.cpp Engine?"*
+   - If selected, the script will silently fetch the Khronos Vulkan SDK, install the Microsoft Visual C++ Build Tools, and perfectly compile the latest Post-March Git master branch of `llama-cpp-python` entirely unattended!
 
 3. **Deploy the INT4 Core**
    We must transform the base Qwen language model into a format the iGPU can read. 

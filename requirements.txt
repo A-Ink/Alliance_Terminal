@@ -32,6 +32,6 @@ accelerate
         #"accelerate"
 
 # --- ENGINE 2: iGPU (Vulkan Core) ---
-# This flag tells pip to pull pre-compiled Vulkan binaries automatically
---extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan
-llama-cpp-python
+# NOTE: llama-cpp-python requires C++ Compilation on Windows to map to Vulkan properly.
+# It has been explicitly removed from this file to prevent CI auto-build crashes.
+# Please run setup.ps1 to interactively compile and install it natively.
