@@ -2,9 +2,9 @@
   "active_model": "phi-4-mini-ov",
   "models": {
     "phi-4-mini": {
-      "display_name": "Phi-4 Mini - Light Core",
+      "display_name": "Phi-4 Mini - iGPU Core",
       "engine": "openvino",
-      "target_device": "NPU",
+      "target_device": "GPU.0",
       "hf_model_id": "microsoft/Phi-4-mini-instruct",
       "path": "./model/phi-4-mini-instruct-int4-ov",
       "temperature": 0.5,
@@ -14,7 +14,7 @@
       "top_k": 40
     },
     "phi-4-mini-ov": {
-      "display_name": "Phi-4 Mini - Light Core",
+      "display_name": "Phi-4 Mini - NPU Core",
       "engine": "openvino",
       "target_device": "NPU",
       "hf_model_id": "bweng/phi-4-mini-instruct-int4-ov-npu",
