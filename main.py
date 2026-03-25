@@ -58,8 +58,8 @@ class Api:
             import time
             import traceback # <--- ADD THIS
             
-            # Wait 1 full second for the JS bridge to stabilize
-            time.sleep(1.0) 
+            # Wait 0.2s for the JS bridge to stabilize (down from 1.0s)
+            time.sleep(0.2) 
             
             try:
                 initialize_backend()
@@ -212,8 +212,8 @@ def _boot_log(text: str, log_type: str = "info"):
             )
         except Exception:
             pass
-    # Small delay for visual effect
-    time.sleep(0.3)
+    # Faster delays for snappier feel
+    time.sleep(0.1)
 
 
 def initialize_backend():
@@ -227,39 +227,47 @@ def initialize_backend():
     _boot_log("[BOOT] Alliance Terminal v2.1 — Boot Sequence Initiated", "info")
     _boot_log("[SYS ] Starfield renderer ............... ONLINE", "ok")
 
-    # Initialize memory
-    _boot_log("[MEM ] Initializing ChromaDB memory core...", "info")
-    try:
-        memory.initialize()
-        count = memory.collection.count() if memory.collection else 0
-        _boot_log(f"[MEM ] ChromaDB memory core ............. ONLINE ({count} facts)", "ok")
-        log.info("ChromaDB memory initialized")
-    except Exception as e:
-        log.error(f"Memory init failed: {e}")
-        msg = _js_escape(str(e))
-        _boot_log(f"[MEM ] Memory init failed: {msg}", "warn")
+    # Initialize subsystems in parallel
+    threads = []
+    
+    # AI Initialization
+    _boot_log("[AI  ] Loading inference pipeline (Caching Enabled)...", "info")
+    def init_ai():
+        try:
+            ai.initialize()
+            _boot_log(f"[AI  ] Model: {ai.model_name}", "ok")
+            _boot_log(f"[AI  ] Device: {ai.device_used} .................. ACTIVE", "ok")
+        except Exception as e:
+            _boot_log(f"[AI  ] Inference pipeline failed: {e}", "error")
+    
+    ai_thread = threading.Thread(target=init_ai)
+    threads.append(ai_thread)
+    ai_thread.start()
 
-    # Initialize mood engine
+    # Memory Initialization
+    _boot_log("[MEM ] Initializing memory core...", "info")
+    def init_mem():
+        try:
+            memory.initialize()
+            count = memory.collection.count() if memory.collection else 0
+            _boot_log(f"[MEM ] Memory core ............... ONLINE ({count} facts)", "ok")
+        except Exception as e:
+            _boot_log(f"[MEM ] Memory init failed: {e}", "warn")
+            
+    mem_thread = threading.Thread(target=init_mem)
+    threads.append(mem_thread)
+    mem_thread.start()
+
+    # Initialize mood engine (Synchronous as it is fast)
     _boot_log("[MOOD] Zero-wake mood engine ............ ONLINE", "ok")
     today_str = date.today().isoformat()
     override_count = len(mood.schedule_db.get(today_str, []))
     if override_count > 0:
         _boot_log(f"[MOOD] Loaded {override_count} schedule overrides", "info")
 
-    # Initialize AI backend
-    _boot_log("[AI  ] Loading inference pipeline...", "info")
-    try:
-        ai.initialize()
-        model = _js_escape(ai.model_name)
-        device = _js_escape(ai.device_used)
-        _boot_log(f"[AI  ] Model: {model}", "ok")
-        _boot_log(f"[AI  ] Device: {device} .................. ACTIVE", "ok")
-        log.info(f"AI backend ready: {ai.model_name} on {ai.device_used}")
-    except Exception as e:
-        log.error(f"AI backend init failed: {e}")
-        msg = _js_escape(str(e))
-        _boot_log(f"[AI  ] Inference pipeline failed: {msg}", "error")
-        _boot_log("[AI  ] Chat functionality unavailable", "warn")
+    # Wait for completion
+    for t in threads:
+        t.join()
 
     # Diagnostics
     _boot_log("[DIAG] System diagnostics ............... ONLINE", "ok")
@@ -331,7 +339,7 @@ def main():
     )
 
     log.info("Launching Alliance Terminal...")
-    webview.start(debug=False, http_server=True)
+    webview.start(debug=False, http_server=False)
     log.info("Application closed.")
 
 

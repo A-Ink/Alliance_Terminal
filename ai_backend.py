@@ -4,13 +4,14 @@ OpenVINO GenAI LLM pipeline with NPU-first routing.
 """
 
 import json
+import os
 import threading
 import logging
 import re
 from pathlib import Path
 import yaml
-from transformers import TextIteratorStreamer
 import openvino_genai as ov_genai
+from openvino_genai import StructuredOutputConfig
 
 log = logging.getLogger("normandy.ai")
 
@@ -22,6 +23,44 @@ PROMPTS_PATH = SCRIPT_DIR / "prompts.yaml"
 class AIBackend:
     """Manages the OpenVINO GenAI LLM pipeline with config-driven model loading."""
 
+    # JSON Schema for Extraction-First AI
+    EXTRACTION_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "response": { "type": "string", "description": "The conversational text for the user." },
+            "entities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": { "type": "string", "description": "Simplified or user-provided task name." },
+                        "original_name": { "type": "string", "description": "Original name mentioned in prompt." },
+                        "action": { "type": "string", "enum": ["create", "modify", "delete", "query"] },
+                        "start_time": { "type": "string", "description": "HH:MM format if mentioned." },
+                        "end_time": { "type": "string", "description": "HH:MM format if mentioned." },
+                        "duration": { "type": "integer", "description": "Duration in minutes." },
+                        "deadline": { "type": "string", "description": "Target deadline if mentioned." },
+                        "priority": { "type": "integer", "description": "Priority score 1-10." },
+                        "notes": { "type": "string", "description": "Any extra context." }
+                    },
+                    "required": ["label", "action"]
+                }
+            },
+            "facts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "fact": { "type": "string" },
+                        "category": { "type": "string" }
+                    },
+                    "required": ["fact"]
+                }
+            }
+        },
+        "required": ["response", "entities", "facts"]
+    }
+
     def __init__(self):
         self.config = self._load_config()
         self.active_model_key = self.config.get("active_model", "")
@@ -31,6 +70,12 @@ class AIBackend:
         self.model_path = str(SCRIPT_DIR / self.model_info.get("path", ""))
         self.engine_type = self.model_info.get("engine", "openvino")
         self.target_device = self.model_info.get("target_device", "NPU")
+        self.cache_dir = self.config.get("cache_dir", "model_cache")
+        
+        # Ensure cache directory exists
+        cache_path = SCRIPT_DIR / self.cache_dir
+        if not cache_path.exists():
+            os.makedirs(cache_path, exist_ok=True)
         
         # State Tracking for UI
         self.model_name = self.display_name
@@ -46,7 +91,8 @@ class AIBackend:
         if not self.system_prompt:
              log.warning(f"No system prompt found for {self.active_model_key}. AI may behave unexpectedly.")
 
-        threading.Thread(target=self.initialize, daemon=True).start()
+        # Initialization is handled explicitly by main.py boot sequence
+        # threading.Thread(target=self.initialize, daemon=True).start()
 
     def _load_config(self) -> dict:
         if CONFIG_PATH.exists():
@@ -70,8 +116,17 @@ class AIBackend:
 
         if self.engine_type == "openvino":
             try:
-                import openvino_genai as ov_genai
-                self.pipe = ov_genai.LLMPipeline(self.model_path, self.target_device)
+                
+                # Use absolute path for caching to ensure it hits the model_cache folder
+                abs_cache_path = str(SCRIPT_DIR / self.cache_dir)
+                log.info(f"Setting cache directory to: {abs_cache_path}")
+                
+                # Force environment variable and explicit all-caps CACHE_DIR key
+                os.environ["OV_GENAI_CACHE_DIR"] = abs_cache_path
+                
+                config = {"CACHE_DIR": abs_cache_path}
+                self.pipe = ov_genai.LLMPipeline(self.model_path, self.target_device, **config)
+                
                 self.is_loaded = True
                 log.info(f"[SUCCESS] OpenVINO hardware graph mapped to {self.target_device}")
             except Exception as e:
@@ -79,8 +134,6 @@ class AIBackend:
 
         elif self.engine_type == "llama.cpp":
             try:
-                import os
-                
                 from llama_cpp import Llama
             
                 # Extract Device ID (GPU.1 -> 1) to ensure we hit the iGPU, not the dGPU.
@@ -145,20 +198,27 @@ class AIBackend:
                         if stream_callback: stream_callback(subword)
                         return False 
 
-                    config = {
-                        "max_new_tokens": max_tokens,
-                        "do_sample": temp > 0,
-                        "temperature": temp,
-                        "top_p": top_p,
-                        "top_k": top_k,
-                        "presence_penalty": presence_penalty,
-                        "frequency_penalty": frequency_penalty,
-                        "repetition_penalty": repeat_penalty # OpenVINO uses competition naming
-                    }
+                    # Use GenerationConfig object instead of dict (Required in 2025.4.1+)
+                    ov_config = ov_genai.GenerationConfig()
+                    ov_config.max_new_tokens = max_tokens
+                    ov_config.do_sample = temp > 0
+                    ov_config.temperature = temp
+                    ov_config.top_p = top_p
+                    ov_config.top_k = top_k
+                    ov_config.presence_penalty = presence_penalty
+                    ov_config.frequency_penalty = frequency_penalty
+                    ov_config.repetition_penalty = repeat_penalty
+                    
+                    # Apply Structured Output Config (xgrammar)
+                    # Note: In 2025.4+, json_schema is a property, not a callable method.
+                    so_config = StructuredOutputConfig()
+                    so_config.json_schema = json.dumps(self.EXTRACTION_SCHEMA)
+                    
                     self.pipe.generate(
                         full_prompt, 
                         streamer=ov_streamer,
-                        **config
+                        generation_config=ov_config,
+                        structured_output_config=so_config
                     )
 
                 elif self.engine_type == "llama.cpp":
@@ -197,69 +257,30 @@ class AIBackend:
             return response_text, facts, schedule_updates
 
     def _post_process(self, raw_text: str):
-        facts = []
-        schedule_updates = []
-        
-        # FIND ALL JSON BLOCKS (even those possibly truncated)
-        # We look for the last valid-looking block as it's the most likely intended output
-        json_blocks = re.findall(r'```json\n(.*?)(?:\n```|$)', raw_text, re.DOTALL | re.IGNORECASE)
-
-        for block in json_blocks:
-            try:
-                block = block.strip()
-                if not block: continue
+        """Standardized JSON parsing with extraction-first schema."""
+        try:
+            # The engine now GUARANTEES valid JSON matching the schema
+            data = json.loads(raw_text)
+            
+            response_text = data.get("response", "Processing complete.")
+            facts = data.get("facts", [])
+            entities = data.get("entities", [])
+            
+            # Map entities to schedule_updates for the UI
+            schedule_updates = []
+            for ent in entities:
+                ent["type"] = "schedule" # Bridge for existing mood_engine logic
+                schedule_updates.append(ent)
                 
-                # RECOVERY: If block is missing closing braces due to truncation
-                open_braces = block.count('{')
-                close_braces = block.count('}')
-                if open_braces > close_braces:
-                    block += '}' * (open_braces - close_braces)
-                
-                # RECOVERY: If block is missing closing brackets due to truncation
-                open_brackets = block.count('[')
-                close_brackets = block.count(']')
-                if open_brackets > close_brackets:
-                    block += ']' * (open_brackets - close_brackets)
-                    # And maybe one more brace if it was inside a list
-                    if block.count('{') > block.count('}'):
-                         block += '}'
-
-                data = json.loads(block)
-                intents = data.get("intents", data.get("commands", []))
-                
-                for intent in intents:
-                    if intent.get("type") == "schedule":
-                        intent["action"] = intent.get("action", "add_flexible")
-                        intent["activity"] = str(intent.get("activity", "Undefined Operation"))
-                        
-                        try:
-                            intent["duration"] = int(intent.get("duration", 60))
-                        except (ValueError, TypeError):
-                            intent["duration"] = 60
-                            
-                        try:
-                            intent["priority"] = int(intent.get("priority", 5))
-                        except (ValueError, TypeError):
-                            intent["priority"] = 5
-                            
-                        schedule_updates.append(intent)
-                    elif intent.get("type") == "memory":
-                        facts.append(intent)
-            except json.JSONDecodeError:
-                # Attempt one last "brute force" extraction of the last object if it's messy
-                try:
-                    last_brace = block.rfind('}')
-                    if last_brace != -1:
-                        data = json.loads(block[:last_brace+1])
-                        # Reuse the logic if successful
-                        continue 
-                except:
-                    log.warning("AI hallucinated invalid JSON structure. Block ignored.")
-
-        clean_text = re.sub(r'```json\n.*?\n```', '', raw_text, flags=re.DOTALL | re.IGNORECASE)
-        clean_text = re.sub(r'<thought>.*?</thought>', '', clean_text, flags=re.DOTALL | re.IGNORECASE)
-        clean_lines = [line.strip() for line in clean_text.split('\n') if line.strip()]
-        return "<br>".join(clean_lines), facts, schedule_updates
+            # Clean up response text for HTML
+            clean_text = response_text.replace("\n", "<br>")
+            
+            return clean_text, facts, schedule_updates
+            
+        except Exception as e:
+            log.error(f"Post-process failure: {e}")
+            # Fallback to legacy extraction if something went horribly wrong
+            return f"[ERROR] Output extraction failed: {e}", [], []
 
     def get_device_info(self) -> dict:
         return {

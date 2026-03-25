@@ -85,43 +85,58 @@ class MoodEngine:
                 self.queue_flexible("Powernap (Sleep Recovery)", 45, "afternoon", 9, target_date)
 
     def execute_schedule_command(self, cmd: dict) -> bool:
-        """Master router for LLM Semantic Intents."""
-        action = cmd.get("action", "add_flexible").lower()
-        activity = cmd.get("activity")
-        if not activity: return False
-
+        """Master router for extracted AI entities (create/modify/delete)."""
+        # Map new schema fields to internal terminology
+        action = cmd.get("action", "create").lower()
+        activity = cmd.get("label", cmd.get("activity", "Unknown Operation"))
+        
         target_date = date.today().isoformat()
         if cmd.get("day", "today") == "tomorrow":
             target_date = (date.today() + timedelta(days=1)).isoformat()
 
         self._init_day(target_date)
 
-        duration = cmd.get("duration", 60)
+        # Extraction-First logic: LLM provides raw data, Python decides the "how"
+        duration = cmd.get("duration")
         priority = cmd.get("priority", 5)
         deadline = cmd.get("deadline", None)
-
+        start_time_str = cmd.get("start_time")
+        
         if action == "delete":
             # Remove from overflow queue natively if user consents via LLM
-            self.overflow_queue = [o for o in self.overflow_queue if activity.lower() not in o["activity"].lower()]
-            return self._delete_task(activity, target_date)
+            search_act = str(activity).lower() if activity else ""
+            self.overflow_queue = [o for o in self.overflow_queue if search_act in str(o.get("activity", "")).lower()]
+            return self._delete_task(str(activity) if activity else "Unknown", target_date)
         
-        elif action == "add_hard":
-            t_str = cmd.get("time", "12:00")
-            h, m = self._parse_time(t_str)
-            return self._force_slot(h, m, duration, activity, priority, target_date, "task", deadline)
-
-        elif action == "update":
-            old = cmd.get("old_activity", activity)
-            self._delete_task(old, target_date)
+        elif action == "modify" or action == "update":
+            # Search for existing task to modify
+            search_name = str(cmd.get("original_name", activity or "")).lower()
+            found = False
+            for t in self.schedule_db.get(target_date, []):
+                t_act = str(t.get("activity", "")).lower()
+                if search_name in t_act or (activity and activity.lower() in t_act):
+                    # Preserve old attributes if not provided in new extraction
+                    duration = duration if duration is not None else t.get("duration", 60)
+                    priority = priority if priority is not None else t.get("priority", 5)
+                    start_time_str = start_time_str or f"{t.get('hour', 12):02d}:{t.get('minute', 0):02d}"
+                    self._delete_task(str(t.get("activity", "")), target_date)
+                    found = True
+                    break
             
-            if "time" in cmd: # Hard update
-                h, m = self._parse_time(cmd["time"])
-                return self._force_slot(h, m, duration, activity, priority, target_date, "task", deadline)
-            else: # Flexible update
-                return self.queue_flexible(activity, duration, cmd.get("time_window", "now"), priority, target_date, deadline)
+            if not found:
+                log.warning(f"Modification target '{search_name}' not found. Defaulting to 'create'.")
+
+        # Decide between hard-slotted (time provided) or flexible (no time provided)
+        final_duration = int(duration) if duration is not None else 60
+        final_deadline = str(deadline) if deadline is not None else ""
+        final_activity = str(activity) if activity else "Unknown Operation"
         
-        else: # Default add_flexible
-            return self.queue_flexible(activity, duration, cmd.get("time_window", "now"), priority, target_date, deadline)
+        if start_time_str:
+            h, m = self._parse_time(start_time_str)
+            return self._force_slot(h, m, final_duration, final_activity, priority, target_date, "task", final_deadline)
+        else:
+            # Flexible placement
+            return self.queue_flexible(final_activity, final_duration, str(cmd.get("time_window", "now")), priority, target_date, final_deadline)
 
     def _parse_time(self, t_str: str):
         match = re.search(r'(\d+):(\d+)', str(t_str))
@@ -135,7 +150,7 @@ class MoodEngine:
         self._save_state()
         return len(self.schedule_db[target_date]) < b_len
 
-    def _force_slot(self, h: int, m: int, dur: int, act: str, pri: int, target_date: str, t_type: str = "task", deadline: str = None):
+    def _force_slot(self, h: int, m: int, dur: int, act: str, pri: int, target_date: str, t_type: str = "task", deadline: str = "") -> bool:
         """Hard locks events, mathematically ripping out lower-priority events to clear space and tracking Overflows."""
         nm = h * 60 + m
         ne = nm + dur
@@ -166,7 +181,7 @@ class MoodEngine:
         self._save_state()
         return True
 
-    def queue_flexible(self, act: str, dur: int, window: str, pri: int, target_date: str, deadline: str = None):
+    def queue_flexible(self, act: str, dur: int, window: str, pri: int, target_date: str, deadline: str = "") -> bool:
         """Standard Bin Packing Algorithm checking flexible gap potentials."""
         w_start, w_end = 8*60, 22*60
         window = str(window).lower()

@@ -1,83 +1,69 @@
 # Alliance Terminal v2
 
-A privacy-focused, locally hosted AI assistant tailored to operate as a proactive, biologically aware scheduling coach. Styled loosely around the *Mass Effect* universe, the AI embodies the hyper-capable, polite persona of an English Butler, optimizing your calendar and tracking your sleep debt natively on edge hardware without sending a single byte of data to the cloud.
+A privacy-focused, locally hosted AI assistant tailored as a proactive, biologically aware scheduling coach. Styled around the *Mass Effect* universe, it embodies the professional, formal persona of an English Butler (Normandy Terminal), optimizing your calendar natively on edge hardware.
 
 ---
 
-## 💻 Core Purpose
+## 💻 Core Purpose: "Extraction-First" Modeling
 
-Modern Small Language Models (SLMs) on edge devices are phenomenal text parsers but incredibly unreliable mathematicians. Asking a 7B parameter AI to calculate calendar arrays across a 24-hour cycle often results in hallucinations (e.g., trying to schedule 25-hour days or dropping crucial tasks).
+The Alliance Terminal solves the "hallucination problem" of small language models (SLMs) by fundamentally restricting the AI's role. We decoupled scheduling logic from the LLM and passed it into a strict mathematical Python constraint engine.
 
-**The Alliance Terminal** solves this by fundamentally restricting the AI. We decoupled chronological math from the LLM and passed it into a strict mathematical Python constraint engine, allowing the AI to focus entirely on conversational guidance and semantic reasoning.
+- **The AI's Role**: Inference and Extraction. It identifies intent, simplifies task names, and extracts raw temporal data (start/end times, durations).
+- **The Python Engine**: Logic and Execution. `mood_engine.py` handles the 24-hour math, conflict resolution, priority bin-packing, and "past-time" checks.
 
 ---
 
-## 🧠 System Architecture & Design Choices
+## 🧠 System Architecture
 
-The architecture is built heavily around maximizing performance on Intel Core Ultra (iGPU) architectures while remaining aggressively battery-conscious.
+The architecture is optimized for **Intel Core Ultra** (Meteor Lake/Lunar Lake) silicon, maximizing performance while remaining battery-conscious.
 
-### 1. Hardware Edge-Deployment Pipeline (OpenVINO)
-To run a massive 15GB Language Model on a thin laptop, raw tensor processing using `llama.cpp` + Vulkan required unstable Python 3.12 custom wheel compilations. 
-Instead, we pivoted the entire application stack to Intel's **OpenVINO** Toolkit. The `download_model.py` module natively ingests the raw `Qwen/Qwen2.5-7B-Instruct` safetensors and compresses them into a hyper-optimized `INT4` mathematical graph. 
+### 1. NPU-First Pipeline (OpenVINO GenAI)
+The primary engine uses **OpenVINO GenAI** 2025.x to route 7B/8B parameter models strictly to the **NPU**. This minimizes CPU/GPU overhead and enables sub-10s cold starts via specialized hardware graph caching (`model_cache`).
 
-Because OpenVINO is strictly tailored by Intel, it flawlessly shifts the 7B parameter model onto the Integrated GPU (`GPU.0`). This bypasses the CPU completely, achieving high token-generation speeds with drastically reduced battery consumption.
-
-### 2. The Hybrid Constraint Solver
-We replaced the chatbot's standard chronological awareness with a **Priority Bin-Packing Algorithm** (`mood_engine.py`). 
-The AI evaluates your text, checks it against biological constraints, and emits **Semantic Intents** rather than firm schedules:
+### 2. Hybrid Entity Extraction
+We use `StructuredOutputConfig` (xgrammar) to enforce a strict JSON schema. The AI cannot hallucinate formatting; it *must* emit a response and a list of structured entities:
 ```json
 {
-  "intents": [
-    { "type": "schedule", "action": "add_flexible", "activity": "Gaming Simulation", "duration": 120, "time_window": "evening", "priority": 3 }
-  ]
+  "response": "Certainly, Commander...",
+  "entities": [
+    { "label": "Tactics Briefing", "action": "create", "start_time": "14:00", "duration": 60 }
+  ],
+  "facts": []
 }
 ```
 
-The Python Engine then takes this intent and slots it mathematically into the day, avoiding human error entirely.
-
-### 3. Biological Heuristics & Timeline Health
-The backend considers holistic human health algorithms natively before attempting to schedule commands:
-1. **Sleep Debt Tracking**: Python autonomously scans 24-hour rolling schedule cycles. If your sleep falls below the `7 hour` threshold, Python instantly tags you with "Sleep Debt" and automatically inserts a Priority-9 **Powernap** (or extends your next sleep window) into the calendar.
-2. **Biological Meal Anchors**: Based on your wake-time, the Engine mathematically blocks out 3 major meals (Priority 8) and 2 flexible snacks (Priority 4). If your workload overflows the timeline, Python's bin-packing algorithm flags snacks to be quietly dropped.
-3. **Deadlines & Dynamic Prioritization**: Every task has a floating priority score (1-10) and an optional deadline. As a deadline approaches the 3-hour mark, Python forcefully multiplies its priority vector, pushing other mundane tasks out of the queue to make room, while prompting the AI to actively flag the deadline to you in the user interface.
-4. **Consent-Driven Overflows**: The constraint solver refuses to automatically delete uncompleted user-events. Instead, if a collision occurs, it passes an `[AT RISK OVERFLOW]` flag strictly back into the LLM's background context window. This triggers the AI to pause and politely ask you, in character: *"Commander, your agenda is saturated. May I delete 'Gaming' to ensure you meet your 8-hour sleep requirement?"*
+### 3. Vulkan GGUF Fallback
+For massive models or devices without an NPU, the terminal supports the **Vulkan Engine** via `llama-cpp-python`. This provides high-speed inference on Intel Arc and integrated GPUs across different architectures.
 
 ---
 
-## ⚙️ Installation & Boot Sequence
+## ⚙️ Installation & Setup
 
 ### Requirements
 - **OS**: Windows 11
-- **Silicon**: Intel Core Ultra (iGPU) or compatible architecture capable of processing OpenVINO pipelines.
-- **Python**: `v3.12+`
+- **Hardware**: Intel Core Ultra (for NPU) or Arc/iGPU (for Vulkan).
+- **Python**: 3.11 (Recommended)
 
-### Configuration
-1. **Clone & Setup Virtual Environment**
-   ```bash
-   git clone https://github.com/A-Ink/Assistant-v2.git
-   cd Assistant-v2
-   python -m venv .venv
-   .\.venv\Scripts\activate
+### Boot Sequence
+1. **Interactive Setup**
+   Run the automated deployment script to initialize the virtual environment and choose your engine:
+   ```powershell
+   ./setup.ps1
    ```
-
-2. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-   *(Note: The terminal requires `openvino`, `openvino-genai`, `transformers`, and `optimum-intel` securely isolated within the virtual environment).*
-
-3. **Deploy the INT4 Core**
-   We must transform the base Qwen language model into a format the iGPU can read. 
-   Run:
-   ```bash
+2. **Deploy AI Cores**
+   Acquire and optimize the models (INT4 quantization + OpenVINO graph build):
+   ```powershell
    python download_model.py
    ```
-   *This process will download approximately 15GB of raw weights from HuggingFace, apply INT4 quantization, and build the OpenVINO graph structure to your disk. This requires roughly 15-30 minutes pending CPU bandwidth and will require high RAM limits during compression.*
-
-4. **Initialize Terminal UI**
-   With the INT4 core established, boot the UI interface and AI backend node by running:
-   ```bash
+3. **Launch Terminal**
+   Start the Normandy UI and AI backend:
+   ```powershell
    python main.py
    ```
 
-_The Alliance Terminal will immediately begin tracking your CPU/RAM diagnostics on screen, spin up the Chromium wrapper, and initialize the Qwen Core onto the iGPU backend natively._
+---
+
+## 🛠️ Performance Tuning
+- **Model Caching**: On the first run, the NPU/Vulkan graph is compiled and stored in `model_cache/`. Subsequent boots will skip compilation, moving from ~45s to <10s load times.
+- **Resource Monitor**: The UI provides real-time telemetry of System RAM and App-specific memory usage.
+- **Thermal Awareness**: The AI is programmed to suggest breaks and monitor "Biological Meal Anchors" to ensure the Commander remains at peak N6/N7 readiness.

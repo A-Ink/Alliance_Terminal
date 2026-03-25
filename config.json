@@ -1,5 +1,6 @@
 {
-  "active_model": "qwen-3-8b",
+  "active_model": "qwen-2.5-7b",
+  "cache_dir": "model_cache",
   "models": {
     "phi-4-mini": {
       "display_name": "Phi-4 Mini - Speed Core",
