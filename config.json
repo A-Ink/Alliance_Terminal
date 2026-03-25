@@ -1,20 +1,8 @@
 {
-  "active_model": "phi-4-mini",
+  "active_model": "qwen-3-8b",
   "models": {
     "phi-4-mini": {
-      "display_name": "Phi-4 Mini - iGPU Core",
-      "engine": "openvino",
-      "target_device": "GPU.0",
-      "hf_model_id": "OpenVINO/Phi-4-mini-instruct-int4-ov",
-      "path": "./model/Phi-4-mini-instruct-int4-ov",
-      "temperature": 0.5,
-      "max_tokens": 1024,
-      "context_size": 2048,
-      "top_p": 0.9,
-      "top_k": 40
-    },
-    "phi-4-mini-ov": {
-      "display_name": "Phi-4 Mini - NPU Speed Core",
+      "display_name": "Phi-4 Mini - Speed Core",
       "engine": "openvino",
       "target_device": "NPU",
       "hf_model_id": "bweng/phi-4-mini-instruct-int4-ov-npu",
@@ -26,7 +14,7 @@
       "top_k": 40
     },
     "qwen-2.5-7b": {
-      "display_name": "Qwen 2.5 7B - NPU Balanced Core",
+      "display_name": "Qwen 2.5 7B - Balanced Core",
       "engine": "openvino",
       "target_device": "NPU",
       "hf_model_id": "OpenVINO/Qwen2.5-7B-Instruct-int4-ov",
@@ -38,7 +26,7 @@
       "top_k": 40
     },
     "qwen-3-8b": {
-      "display_name": "Qwen 3 8B - NPU Power Core",
+      "display_name": "Qwen 3 8B - Reasoning Core",
       "engine": "openvino",
       "target_device": "NPU",
       "hf_model_id": "OpenVINO/Qwen3-8B-int4-cw-ov",
@@ -49,16 +37,15 @@
       "top_p": 0.9,
       "top_k": 40
     },
-    "llama-3.1-8b": {
-      "display_name": "Llama 3.1 8B Instruct - dGPU Core",
-      "engine": "llama.cpp",
-      "target_device": "GPU.0",
-      "hf_model_id": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-      "hf_gguf_file": "Meta-Llama-3.1-8B-Instruct-Q6_K.gguf",
-      "path": "./model/Meta-Llama-3.1-8B-Instruct-Q6_K.gguf",
+    "mistral-7b": {
+      "display_name": "Mistral 7B - Execution Core",
+      "engine": "openvino",
+      "target_device": "NPU",
+      "hf_model_id": "OpenVINO/Mistral-7B-Instruct-v0.3-int4-cw-ov",
+      "path": "./model/Mistral-7B-Instruct-v0.3-int4-cw-ov-npu",
       "temperature": 0.3,
-      "max_tokens": 1024,
-      "context_size": 4096,
+      "max_tokens": 2048,
+      "context_size": 2048,
       "top_p": 0.9,
       "top_k": 40
     }
