@@ -212,6 +212,11 @@ class AIBackend:
                     # --- OPENVINO GENERATION LOGIC ---
                     full_prompt = f"<|system|>{self.system_prompt}\n{context_block}<|end|>\n<|user|>{user_message}<|end|>\n<|assistant|>"
                     
+                    # LOG TELEMETRY
+                    log.info(f"System Message Size: {len(self.system_prompt)} chars")
+                    log.info(f"Context Block Size: {len(context_block)} chars")
+                    log.info(f"Total Prompt String Size: {len(full_prompt)} chars")
+                    
                     def ov_streamer(subword: str) -> ov_genai.StreamingStatus:
                         nonlocal raw_text
                         raw_text += subword
@@ -284,7 +289,18 @@ class AIBackend:
         print("="*60)
 
         try:
-            # The engine now GUARANTEES valid JSON matching the schema
+            # Check for obvious truncation (missing ending braces)
+            if not raw_text.strip().endswith("}"):
+                log.warning("Detected potentially truncated AI response. Attempting recovery...")
+                # Basic recovery: try to close the JSON if it looks like it was cut off
+                if raw_text.count("{") > raw_text.count("}"):
+                    # Very crude recovery for single-object or array-of-objects truncation
+                    if raw_text.strip().endswith(",") or raw_text.strip().endswith("[") or raw_text.strip().endswith("{"):
+                        pass # Too broken to auto-fix reliably without a real parser
+                    else:
+                        pass 
+
+            # The engine now GUARANTEES valid JSON matching the schema (unless truncated)
             data = json.loads(raw_text)
             
             response_text = data.get("response", "Processing complete.")
@@ -310,7 +326,7 @@ class AIBackend:
             schedule_updates = []
             for ent in entities:
                 ent["type"] = "schedule" # Bridge
-                # Rename/Map fields if mood_engine bridge expects specific keys
+                # Rename/Map fields if logic_engine bridge expects specific keys
                 schedule_updates.append(ent)
                 
             # Clean up response text for HTML

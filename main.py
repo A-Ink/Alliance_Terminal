@@ -23,7 +23,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from ai_backend import AIBackend
 from memory_manager import MemoryManager
-from mood_engine import MoodEngine
+from logic_engine import LogicEngine
 
 # ---- Logging ----
 logging.basicConfig(
@@ -36,7 +36,7 @@ log = logging.getLogger("normandy.main")
 # ---- Globals ----
 ai = AIBackend()
 memory = MemoryManager()
-mood = MoodEngine()
+logic = LogicEngine()
 window = None
 REMINDER_INTERVAL_SEC = 900  # 15 minutes
 
@@ -89,7 +89,7 @@ class Api:
             # Get RAG context and Schedule Context
             relevant_facts = memory.query_relevant(text, n=5)
             codex_text = "\n".join(f"• {f}" for f in relevant_facts)
-            schedule_text = mood.get_context_for_ai()
+            schedule_text = logic.get_context_for_ai()
             
             # Combine them for the AI
             rag_context = f"{schedule_text}\n\n[DOSSIER FACTS]\n{codex_text}"
@@ -120,7 +120,7 @@ class Api:
             # Process schedule updates (Routing JSON dicts)
             schedule_updated = False
             for cmd in schedule_updates:
-                success = mood.execute_schedule_command(cmd)
+                success = logic.execute_schedule_command(cmd)
                 if success:
                     schedule_updated = True
 
@@ -145,7 +145,7 @@ class Api:
     def get_mood(self) -> str:
         """Get current mood prediction HTML."""
         try:
-            return mood.get_mood_html()
+            return logic.get_mood_html()
         except Exception as e:
             log.error(f"get_mood error: {e}")
             return ""
@@ -153,7 +153,7 @@ class Api:
     def get_schedule(self) -> str:
         """Get daily schedule HTML (merged defaults + user overrides)."""
         try:
-            return mood.get_schedule_html()
+            return logic.get_schedule_html()
         except Exception as e:
             log.error(f"get_schedule error: {e}")
             return ""
@@ -262,12 +262,12 @@ def initialize_backend():
     threads.append(mem_thread)
     mem_thread.start()
 
-    # Initialize mood engine (Synchronous as it is fast)
-    _boot_log("[MOOD] Zero-wake mood engine ............ ONLINE", "ok")
+    # Initialize logic engine (Synchronous as it is fast)
+    _boot_log("[LOGIC] Zero-wake logic engine ............ ONLINE", "ok")
     today_str = date.today().isoformat()
-    override_count = len(mood.schedule_db.get(today_str, []))
+    override_count = len(logic.schedule_db.get(today_str, []))
     if override_count > 0:
-        _boot_log(f"[MOOD] Loaded {override_count} schedule overrides", "info")
+        _boot_log(f"[LOGIC] Loaded {override_count} schedule overrides", "info")
 
     # Wait for completion
     for t in threads:
@@ -303,7 +303,7 @@ def _reminder_loop():
     while True:
         try:
             if window:
-                reminders = mood.check_reminders()
+                reminders = logic.check_reminders()
                 for reminder_html in reminders:
                     escaped = _js_escape(reminder_html)
                     try:

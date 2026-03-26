@@ -26,7 +26,7 @@ A privacy-focused, locally hosted AI assistant tailored as a proactive, biologic
 
 ## 🧠 Core Systems & Logic
 
-The Terminal is powered by the **MoodEngine**, a custom biometric synthesis layer that enforces human-centric constraints.
+The Terminal is powered by the **LogicEngine**, a custom biometric synthesis layer that enforces human-centric constraints.
 
 ### 1. Biometric Energy Bar (0-100%)
 The UI displays a real-time energy score calculated from four primary variables:

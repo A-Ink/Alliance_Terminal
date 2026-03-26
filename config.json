@@ -8,9 +8,9 @@
       "engine": "openvino",
       "target_device": "NPU",
       "path": "./model/Qwen2.5-7B-Instruct-int4-ov",
-      "temperature": 0.1,
+      "temperature": 0.3,
       "max_tokens": 2048,
-      "context_size": 2048,
+      "context_size": 4096,
       "top_p": 0.9,
       "top_k": 40
     },
@@ -22,7 +22,7 @@
       "path": "./model/Qwen3-8B-int4-cw-ov",
       "temperature": 0.3,
       "max_tokens": 2048,
-      "context_size": 2048,
+      "context_size": 4096,
       "top_p": 0.9,
       "top_k": 40
     },
@@ -34,7 +34,7 @@
       "path": "./model/phi-4-mini-instruct-int4-ov-npu",
       "temperature": 0.5,
       "max_tokens": 1024,
-      "context_size": 2048,
+      "context_size": 4096,
       "top_p": 0.9,
       "top_k": 40
     },
@@ -46,7 +46,7 @@
       "path": "./model/Mistral-7B-Instruct-v0.3-int4-cw-ov",
       "temperature": 0.3,
       "max_tokens": 2048,
-      "context_size": 2048,
+      "context_size": 4096,
       "top_p": 0.9,
       "top_k": 40
     }

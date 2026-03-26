@@ -8,14 +8,14 @@ import json
 import logging
 from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Literal
+from typing import List, Dict, Optional, Any, Literal, Tuple
 from pydantic import BaseModel, Field
 
-log = logging.getLogger("normandy.mood")
+log = logging.getLogger("normandy.logic")
 
 # Configuration & Paths
 SCRIPT_DIR = Path(__file__).parent
-SCHEDULE_PATH = SCRIPT_DIR / "schedule_history.json"
+SCHEDULE_PATH = SCRIPT_DIR / "schedule.json"
 
 # --- PYDANTIC SCHEMAS (Extraction Layer Interface) ---
 
@@ -27,7 +27,7 @@ class UserIntent(BaseModel):
     event_name: str
     start_time_reference: Optional[str] = Field(None, description="e.g., 'now', '9am', '14:00'.")
     end_time_reference: Optional[str] = Field(None, description="e.g., '11pm'.")
-    duration_minutes: Optional[int] = Field(60, description="Inferred duration.")
+    duration_minutes: Optional[int] = Field(None, description="Inferred duration.")
     priority: int = Field(5, ge=1, le=10, description="Priority scale 1-10.")
     deadline: Optional[str] = Field(None, description="ISO format deadline string.")
     date_reference: Optional[str] = Field(None, description="e.g., 'today', 'tomorrow'. Specific dates also supported.")
@@ -37,8 +37,8 @@ class ParsedInput(BaseModel):
 
 # --- CORE LOGIC ENGINE ---
 
-class MoodEngine:
-    def __init__(self, state_file: str = "schedule_history.json"):
+class LogicEngine:
+    def __init__(self, state_file: str = "schedule.json"):
         self.state_file = Path(SCRIPT_DIR / state_file)
         self.schedule_db: Dict[str, List[Dict[str, Any]]] = {}
         self.overflow_queue: List[Dict[str, Any]] = []
@@ -159,24 +159,103 @@ class MoodEngine:
             return
         
         if target_date not in self.schedule_db:
-            self._in_init = target_date
-            try:
-                self.schedule_db[target_date] = []
-                self._inject_daily_biological_anchors(target_date)
-            finally:
-                self._in_init = None
+            self.schedule_db[target_date] = []
+            
+        self._in_init = target_date
+        try:
+            self._inject_daily_biological_anchors(target_date)
+        finally:
+            self._in_init = None
 
     def _inject_daily_biological_anchors(self, target_date: str):
-        """Anchors meals, sleep/wake cycles, and checks for recovery protocols."""
-        # 1. Primary Biological Anchors (Shiftable)
-        self._force_slot(target_date, "07:00", 15, "Wake (Biological Anchor)", 8, "biological")
-        self._force_slot(target_date, "23:00", 480, "Sleep (Biological Anchor)", 8, "sleep")
+        """Ensures Sleep, Wake, and Meals exist. Re-injects placeholders if missing."""
+        tasks = self.schedule_db.get(target_date, [])
+        activities = [t['activity'].lower() for t in tasks]
+        
+        # Sequence definition
+        placeholders = [
+            ("Wake (Biological Anchor)", "07:00", 15, 8, "biological"),
+            ("Sleep", "23:00", 420, 9, "sleep"),
+            ("Breakfast", "08:30", 45, 8, "meal"),
+            ("Lunch", "13:00", 60, 8, "meal"),
+            ("Dinner", "19:00", 60, 8, "meal"),
+            ("Snack", "16:00", 15, 4, "meal")
+        ]
+        
+        for name, start, dur, pri, t_type in placeholders:
+            match = False
+            for act in activities:
+                # Fuzzy match to detect existing user version
+                if name.lower() in act or act in name.lower():
+                    match = True
+                    break
+            
+            if not match:
+                log.info(f"Injecting persistent placeholder for {name} on {target_date}")
+                self._force_slot(target_date, start, dur, name, pri, t_type)
+        
+    def _align_biological_anchors(self, target_date: str, pending_intent: Optional[UserIntent] = None):
+        """Re-calculates Wake and Breakfast based on the first P9 commitment of the day."""
+        if target_date not in self.schedule_db: return
 
-        # 2. Main Meals (Priority 8)
-        self._force_slot(target_date, "08:30", 45, "Breakfast", 8, "meal")
-        self._force_slot(target_date, "13:00", 60, "Lunch", 8, "meal")
-        self._force_slot(target_date, "19:00", 60, "Dinner", 8, "meal")
-        self._force_slot(target_date, "16:00", 15, "Snack", 4, "meal")
+        # 1. Find the Anchor Objects (Fetch fresh from DB)
+        sleep = next((t for t in self.schedule_db[target_date] if "sleep" in t['activity'].lower()), None)
+        wake = next((t for t in self.schedule_db[target_date] if "wake" in t['activity'].lower()), None)
+        breakfast = next((t for t in self.schedule_db[target_date] if "breakfast" in t['activity'].lower()), None)
+        
+        if not sleep: return # Can't align without sleep
+        
+        # 2. Find the first P9 (Non-Biological) after Sleep
+        sm = self._time_to_minutes(sleep['start_time'])
+        first_p9_m = 1440
+        
+        # Check Existing Tasks
+        for t in sorted(self.schedule_db[target_date], key=lambda x: x['start_time']):
+            pri = self._apply_deadline_gravity(t.get('priority', 5), t.get('deadline'))
+            tm = self._time_to_minutes(t['start_time'])
+            if pri >= 9 and tm > sm and t != sleep:
+                first_p9_m = tm
+                break
+        
+        # Check Pending Intent (Proactive Alignment)
+        if pending_intent and pending_intent.priority >= 9:
+            int_m = self._time_to_minutes(pending_intent.start_time_reference)
+            if int_m > sm:
+                first_p9_m = min(first_p9_m, int_m)
+        
+        # 3. Re-calculate Wake (Target 7h Rest, but capped by first P9 - 1h)
+        target_wake_m = sm + 420
+        wake_limit_m = first_p9_m - 60
+        final_wake_m = min(target_wake_m, wake_limit_m)
+        
+        # Safety: minimum 1h sleep
+        if final_wake_m <= sm: final_wake_m = sm + 60
+        
+        # Update Sleep Duration
+        sleep['duration'] = final_wake_m - sm
+        log.info(f"Alignment: Sleep [{sleep['start_time']}] dur set to {sleep['duration']}m")
+        
+        # 4. Standardize/Update Wake Anchor
+        wh, wm = (final_wake_m // 60) % 24, (final_wake_m % 60)
+        new_wake_str = f"{wh:02d}:{wm:02d}"
+        if wake:
+            wake['start_time'] = new_wake_str
+            wake['duration'] = 15
+            log.info(f"Alignment: Wake moved to {new_wake_str}")
+        else:
+             self._force_slot(target_date, new_wake_str, 15, "Wake (Biological Anchor)", 8, "biological")
+
+        # 5. Morning Routine (Breakfast)
+        if breakfast:
+            # If there's a 1hr gap, put breakfast in it
+            if first_p9_m - final_wake_m >= 60:
+                bm = final_wake_m + 15
+                bh, bmm = (bm // 60) % 24, (bm % 60)
+                breakfast['start_time'] = f"{bh:02d}:{bmm:02d}"
+                breakfast['duration'] = 30
+            else:
+                # No gap? Let the Meal Sequence logic move it after Wake or where it fits
+                pass
         
         # Check Sleep Debt
         debt_mins = self._calculate_sleep_debt(target_date)
@@ -199,7 +278,7 @@ class MoodEngine:
         return max(0, threshold - total_sleep) if total_sleep > 0 else 0
 
     def get_context_for_ai(self) -> str:
-        """Injects hardware time and biological constraints into the AI system prompt."""
+        """Injects hardware time, biological constraints, and pending verification into the AI context."""
         now = datetime.now()
         today_str = now.date().isoformat()
         self._init_day(today_str)
@@ -211,22 +290,41 @@ class MoodEngine:
         ]
         
         if debt_mins > 0:
-            context.append(f"[BIOMEDICAL ALERT] CRITICAL SLEEP DEBT: {debt_mins} minutes deficit detected. Focus protocols degraded.")
+            context.append(f"[BIOMEDICAL ALERT] CRITICAL SLEEP DEBT: {debt_mins}m deficit. Focus degraded.")
         
+        # --- PENDING VERIFICATION (ZOMBIE TASKS) ---
+        zombies = []
+        now_m = now.hour * 60 + now.minute
+        # Check today and yesterday for uncompleted tasks that have passed
+        for d_str in [ (now - timedelta(days=1)).date().isoformat(), today_str ]:
+            for t in self.schedule_db.get(d_str, []):
+                # ONLY verify actual 'task' types, skip anchors/meals
+                if t.get('completed') or t.get('type') != 'task': continue
+                h, m = map(int, t['start_time'].split(':'))
+                end_m = h * 60 + m + t['duration']
+                # If task ended > 5 mins ago and not completed
+                if (d_str < today_str) or (end_m < now_m - 5):
+                    zombies.append(f"{t['activity']} (scheduled {t['start_time']})")
+        
+        if zombies:
+            context.append("\n[URGENT: PENDING VERIFICATION]")
+            context.append("The following tasks have passed their scheduled time. ASK THE COMMANDER IF THEY WERE COMPLETED:")
+            for z in zombies: context.append(f" - {z}")
+
         # Current Schedule Overview
         context.append("\n[CURRENT OPERATIONS SCHEDULE]")
         day_tasks = self.schedule_db.get(today_str, [])
-        # Safe sort: skip items missing 'start_time'
         valid_tasks = [t for t in day_tasks if "start_time" in t]
         for t in sorted(valid_tasks, key=lambda x: x['start_time']):
-            # Apply Deadline Gravity for context view
             pri = self._apply_deadline_gravity(t.get('priority', 5), t.get('deadline'))
-            context.append(f"- {t['start_time']} ({t['duration']}m) [P{pri}]: {t['activity']}")
+            status = " [DONE]" if t.get('completed') else ""
+            context.append(f"- {t['start_time']} ({t['duration']}m) [P{pri}]: {t['activity']}{status}")
             
         if self.overflow_queue:
-            context.append("\n[OVERFLOW QUEUE - AWAITING RE-PACKING]")
+            context.append("\n[OVERFLOW QUEUE - HIGH PRIORITY PENDING]")
             for o in self.overflow_queue:
-                context.append(f"- {o['activity']} ({o['duration']}m) [P{o['priority']}]")
+                p = self._apply_deadline_gravity(o['priority'], o.get('deadline'))
+                context.append(f"- {o['activity']} ({o['duration']}m) [P{p}]")
                 
         return "\n".join(context)
 
@@ -240,6 +338,14 @@ class MoodEngine:
         for intent in sorted_intents:
             self._execute_intent(intent)
         self._save_state()
+
+    def _time_to_minutes(self, hhmm: str) -> int:
+        """Converts HH:MM string to absolute minutes from midnight."""
+        try:
+            h, m = map(int, hhmm.split(':'))
+            return h * 60 + m
+        except Exception:
+            return 0
 
     def calculate_dynamic_wake_time(self, target_date: str) -> str:
         """Helper to find the earliest fixed event and subtract 1 hour."""
@@ -268,7 +374,8 @@ class MoodEngine:
                 intent_type=cmd.get("intent_type") or ("fixed_event" if cmd.get("start_time") or cmd.get("start_time_reference") else "floating_task"),
                 event_name=str(cmd.get("event_name", cmd.get("label", cmd.get("activity", "Unknown Operation")))),
                 start_time_reference=cmd.get("start_time_reference", cmd.get("start_time")),
-                duration_minutes=int(cmd.get("duration_minutes", cmd.get("duration", 60))),
+                end_time_reference=cmd.get("end_time_reference", cmd.get("end_time")),
+                duration_minutes=int(cmd.get("duration_minutes", cmd.get("duration", 0))) or None,
                 priority=int(cmd.get("priority", 5)),
                 deadline=cmd.get("deadline")
             )
@@ -361,6 +468,7 @@ class MoodEngine:
         """Internal executor for a single UserIntent."""
         now = datetime.now()
         target_date = date.today().isoformat()
+        name = intent.event_name.lower()
         
         # 1. DATE INFERENCE (Explicit vs Duration-Aware Guessing)
         if intent.date_reference:
@@ -434,47 +542,108 @@ class MoodEngine:
 
         self._init_day(target_date)
 
-        # 3. CONTROLLED DELETIONS/MODIFICATIONS
-        if intent.action in ["delete", "modify"]:
-            found = False
-            # If a specific date or time was given, ONLY search that target
-            if intent.date_reference or intent.start_time_reference:
-                search_dates = [target_date]
-            else:
-                # Priority search: Today first, then tomorrow as fallback
-                search_dates = [date.today().isoformat(), (date.today() + timedelta(days=1)).isoformat()]
+        # 3. IDEMPOTENT DEDUPLICATION & DELETION
+        # If action is 'create', we check if a similar task already exists.
+        # If so, we treat it as an OVERWRITE (modify) to prevent duplicates.
+        found = False
+        base_time_for_delta = None
+        
+        # Determine search range: Use explicit date if provided, otherwise check today/tomorrow
+        if intent.date_reference:
+            search_dates = [target_date]
+        else:
+            search_dates = [date.today().isoformat(), (date.today() + timedelta(days=1)).isoformat()]
+
+        for d_str in search_dates:
+            tasks = self.schedule_db.get(d_str, [])
+            if not tasks: continue
             
-            for d_str in search_dates:
-                tasks = self.schedule_db.get(d_str, [])
-                new_tasks = [
-                    t for t in tasks 
-                    if not (intent.event_name.lower() in t['activity'].lower() or t['activity'].lower() in intent.event_name.lower())
-                ]
-                if len(new_tasks) < len(tasks):
-                    self.schedule_db[d_str] = new_tasks
-                    found = True
-                    log.info(f"Deleted '{intent.event_name}' from {d_str}")
-                    if intent.start_time_reference: break # Found in targeted date
+            new_tasks = []
+            for t in tasks:
+                act = t['activity'].lower()
+                match = False
+                
+                # Fuzzy name match
+                if name in act or act in name:
+                    match = True
+                
+                # BIOLOGICAL COMPANION DEDUPLICATION
+                # If we are adding Sleep, we MUST clear any existing Wake anchors too
+                if ("sleep" in name or "bedtime" in name) and ("wake" in act):
+                    match = True
+                
+                if match:
+                    if not found:
+                        base_time_for_delta = t.get('start_time')
+                        log.info(f"Deduplication: Detected existing '{t['activity']}' on {d_str}. Overwriting.")
+                        found = True
+                    continue # Exclude from new_tasks
+                new_tasks.append(t)
             
-            if found and intent.action == "delete":
-                return True
-            # For modify, we continue to create the 'new' version
+            if len(new_tasks) < len(tasks):
+                self.schedule_db[d_str] = new_tasks
+            
+        # 3.5 HALLUCINATION GUARD: If AI sends action:create for a known task name, 
+        # but hallucinations a start time that differs by > 90m, we force-reconcile it.
+        # EXCEPTION: Biological anchors (Sleep/Wake) and explicit shifts.
+        if found and intent.action == "create" and intent.start_time_reference:
+            is_bio = any(b in name for b in ["sleep", "wake", "bedtime"])
+            if not is_bio:
+                it_m = self._time_to_minutes(intent.start_time_reference)
+                bt_m = self._time_to_minutes(base_time_for_delta)
+                # Handle wrap-around (1440m)
+                diff = abs(it_m - bt_m)
+                if diff > 720: diff = abs(1440 - diff)
+                
+                if diff > 90:
+                    log.warning(f"Hallucination Guard: Overriding hallucinated shift ({intent.start_time_reference}) for {intent.event_name} to preserve existing {base_time_for_delta}.")
+                    intent.start_time_reference = base_time_for_delta
+        
+        if found and intent.action == "delete":
+            return True
+        
+        # 4. TIME PARSING (Relative-Aware)
             
         # --- PRIORITY HIERARCHY / FLEXIBILITY RULES ---
 
-        # --- PRIORITY HIERARCHY / FLEXIBILITY RULES ---
-        # School/Fixed Items (P9)
-        school_keywords = ["class", "lecture", "exam", "school", "university", "seminar"]
-        if any(k in intent.event_name.lower() for k in school_keywords):
-            intent.priority = max(intent.priority, 9)
+        # --- GLOBAL BIOLOGICAL INTERCEPT ---
+        if "sleep" in name or "bedtime" in name:
+            # Resolve Sleep Start Time
+            sleep_start_str = self._parse_time_reference(intent.start_time_reference or "23:00")
+            if not sleep_start_str: sleep_start_str = "23:00"
             
-        # Meals (P8)
-        meal_keywords = ["lunch", "dinner", "breakfast", "meal"]
-        if any(k in intent.event_name.lower() for k in meal_keywords):
+            # Triggers automatic realignment
+            res = self._force_slot(target_date, sleep_start_str, 420, "Sleep", 9, "sleep")
+            self._align_biological_anchors(target_date)
+            return res
+
+        # --- AUTO-DURATION CALCULATOR ---
+        if intent.start_time_reference and intent.end_time_reference:
+            s_str = self._parse_time_reference(intent.start_time_reference)
+            e_str = self._parse_time_reference(intent.end_time_reference)
+            if s_str and e_str:
+                sm = self._time_to_minutes(s_str)
+                em = self._time_to_minutes(e_str)
+                # Handle wraps (e.g. 10pm to 1am)
+                if em < sm: em += 1440
+                intent.duration_minutes = em - sm
+                log.info(f"Calculated duration for '{intent.event_name}': {intent.duration_minutes}m ({s_str} to {e_str})")
+
+        # --- PRIORITY HEURISTICS ---
+        school_ks = ["class", "lecture", "exam", "school", "uni", "seminar", "project"]
+        if any(k in name for k in school_ks):
+            intent.priority = max(intent.priority, 9)
+        
+        meal_ks = ["lunch", "dinner", "breakfast", "meal", "snack"]
+        if any(k in name for k in meal_ks):
             intent.priority = max(intent.priority, 8)
 
         if intent.intent_type == "fixed_event":
-            return self._force_slot(
+            # Proactive Alignment for P9+ Fixed Events (like exams/classes)
+            if intent.priority >= 9:
+                self._align_biological_anchors(target_date, pending_intent=intent)
+                
+            res = self._force_slot(
                 target_date, 
                 intent.start_time_reference or "12:00", 
                 intent.duration_minutes or 60,
@@ -483,6 +652,10 @@ class MoodEngine:
                 "task",
                 intent.deadline or ""
             )
+            
+            # Final alignment check
+            self._align_biological_anchors(target_date)
+            return res
         elif intent.intent_type == "floating_task":
             return self.queue_flexible(
                 target_date,
@@ -509,8 +682,21 @@ class MoodEngine:
                 self.user_energy = 100 + current_penalty
                 log.info(f"Commander reported high energy. Base adjusted to {self.user_energy} to reach 100% target.")
                 return True
-            if "sleep" in name:
-                return self._force_slot(target_date, "00:00", intent.duration_minutes or 420, "Sleep", 8, "sleep")
+            
+            # TASK COMPLETION HANDLER
+            if any(k in name for k in ["finished", "completed", "done", "mission success"]):
+                # Clean name: remove "done with", "finished", etc.
+                target = name
+                for k in ["done with ", "finished ", "completed ", "mission success "]:
+                    target = target.replace(k, "")
+                target = target.strip()
+                
+                for d_str in [target_date, (now - timedelta(days=1)).date().isoformat()]:
+                    for t in self.schedule_db.get(d_str, []):
+                        if target in t['activity'].lower() or t['activity'].lower() in target:
+                            t['completed'] = True
+                            log.info(f"VERIFIED: '{t['activity']}' marked COMPLETED.")
+                            return True
         return False
 
     def check_reminders(self) -> List[str]:
@@ -641,11 +827,12 @@ class MoodEngine:
             is_active = dt <= now < dt + timedelta(minutes=t['duration'])
             curr_class = " current" if is_active else ""
             task_type = t.get('type', 'task')
+            time_opacity = "opacity: 0.4;" if task_type in ["sleep", "biological", "meal"] else ""
             pri_color = "var(--orange-n7)" if t.get('priority', 5) >= 8 else "var(--text-dim)"
             
             parts.append(
                 f"<div class='schedule-entry{curr_class} {task_type}'>"
-                f"<span style='color: var(--cyan-bright); font-family: Orbitron, monospace; font-size: 13px; letter-spacing: 1px; font-weight: bold;'>{t['start_time']}</span> "
+                f"<span style='color: var(--cyan-bright); {time_opacity} font-family: Orbitron, monospace; font-size: 13px; letter-spacing: 1px; font-weight: bold;'>{t['start_time']}</span> "
                 f"<span class='schedule-task'>{t['activity']}</span> "
                 f"<span style='color: {pri_color}; font-size: 0.8em;'>({t['duration']}m)</span>"
                 f"</div>"
@@ -653,7 +840,7 @@ class MoodEngine:
         return "".join(parts)
 
     def _apply_deadline_gravity(self, base_priority: int, deadline: Optional[str]) -> int:
-        """Scales priority based on proximity to ISO deadline."""
+        """Scales priority aggressively as the deadline approaches."""
         if not deadline:
             return base_priority
         try:
@@ -662,6 +849,8 @@ class MoodEngine:
             hours_left = (dl_dt - now).total_seconds() / 3600
             
             if hours_left <= 0: return 10
+            if hours_left < 3: return 10 # Final stretch
+            if hours_left < 6: return max(9, base_priority + 4)
             if hours_left < 12: return min(10, base_priority + 3)
             if hours_left < 24: return min(10, base_priority + 2)
             if hours_left < 48: return min(10, base_priority + 1)
@@ -700,10 +889,9 @@ class MoodEngine:
                         survivors.append(task)
                         continue
                     
-                    if "sleep" in task['activity'].lower() and new_end > ts:
-                        # Shift Sleep later if the activity ends after bedtime
-                        log.info(f"Shifting Sleep later for '{activity}'")
-                        # Move sleep to 15m after the activity ends
+                    if "sleep" in task['activity'].lower() and new_end > ts and new_start > 1020: # 17:00 (5pm)
+                        # Shift Sleep later if the activity ends after bedtime (Only for evening tasks)
+                        log.info(f"Shifting Sleep later for evening activity '{activity}'")
                         new_sleep_start = new_end + 15
                         
                         # Handle Rollover
@@ -744,7 +932,8 @@ class MoodEngine:
             "activity": activity,
             "priority": priority,
             "type": t_type,
-            "deadline": deadline
+            "deadline": deadline,
+            "completed": False # New flag
         })
         
         # Re-sort and save
@@ -756,6 +945,41 @@ class MoodEngine:
             self.queue_flexible(target_date, item['activity'], item['duration'], item['priority'], "now", item.get('deadline'))
             
         return True
+
+    def _apply_meal_sequence_constraints(self, target_date: str, activity: str, w_start: int, w_end: int) -> Tuple[int, int]:
+        """Ensures Breakfast < Lunch < Dinner sequence is preserved during shifting."""
+        name = activity.lower()
+        order = {"breakfast": 0, "lunch": 1, "dinner": 2}
+        
+        # Snacks, Supper, and others are exempt
+        if not any(m in name for m in order):
+            return w_start, w_end
+            
+        current_idx = next(idx for m, idx in order.items() if m in name)
+        
+        # Find existing meals on this date
+        meals = []
+        for t in self.schedule_db.get(target_date, []):
+            act = t['activity'].lower()
+            if any(m in act for m in order):
+                idx = next(idx for m, idx in order.items() if m in act)
+                # Skip the one we are currently trying to schedule/re-schedule
+                if name in act or act in name: continue
+                
+                m_start = self._time_to_minutes(t['start_time'])
+                meals.append({"idx": idx, "start": m_start, "end": m_start + t['duration']})
+        
+        # Apply constraints based on order
+        for m in meals:
+            if m['idx'] < current_idx:
+                # This is a predecessor (e.g. Lunch checking Breakfast)
+                w_start = max(w_start, m['end'])
+            if m['idx'] > current_idx:
+                # This is a successor (e.g. Lunch checking Dinner)
+                w_end = min(w_end, m['start'])
+                
+        # Final safety: Breakfast/Lunch cannot cross midnight (already handled by w_end usually)
+        return w_start, w_end
 
     def queue_flexible(self, target_date: str, activity: str, duration: int, priority: int, window: str = "now", deadline: str = "") -> bool:
         """The Gap Finder with Energy-Aware Overrides."""
@@ -778,6 +1002,8 @@ class MoodEngine:
         elif "evening" in window: w_start, w_end = 18 * 00, 23 * 59
         elif "now" in window and target_date == now.date().isoformat():
             w_start = now.hour * 60 + now.minute + 1
+            # MEAL SEQUENCE PROTECTION: Ensure Breakfast < Lunch < Dinner
+            w_start, w_end = self._apply_meal_sequence_constraints(target_date, activity, w_start, w_end)
         elif ":" in window: # Specific time like "00:00"
             wh, wm = map(int, window.split(':'))
             w_start = wh * 60 + wm
@@ -846,7 +1072,7 @@ class MoodEngine:
 
 # --- MODULE TEST / USAGE EXAMPLES ---
 if __name__ == "__main__":
-    engine = MoodEngine()
+    engine = LogicEngine()
     
     # Mock some Test Data Context for the User intents
     test_input = ParsedInput(intents=[
