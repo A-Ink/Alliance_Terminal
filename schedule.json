@@ -20,19 +20,84 @@
         "completed": false
       },
       {
-        "start_time": "09:15",
-        "duration": 30,
-        "activity": "Breakfast",
-        "priority": 8,
+        "start_time": "10:00",
+        "duration": 150,
+        "activity": "Math Class",
+        "priority": 9,
         "type": "task",
         "deadline": "",
         "completed": false
       },
       {
-        "start_time": "10:00",
-        "duration": 150,
-        "activity": "Math Class",
+        "start_time": "12:30",
+        "duration": 60,
+        "activity": "Chemistry 1D Project Meeting",
         "priority": 9,
+        "type": "task",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "13:30",
+        "duration": 60,
+        "activity": "Lunch",
+        "priority": 8,
+        "type": "meal",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "16:00",
+        "duration": 15,
+        "activity": "Snack",
+        "priority": 4,
+        "type": "meal",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "19:00",
+        "duration": 60,
+        "activity": "Dinner",
+        "priority": 8,
+        "type": "meal",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "23:00",
+        "duration": 420,
+        "activity": "Sleep",
+        "priority": 9,
+        "type": "sleep",
+        "deadline": "",
+        "completed": false
+      }
+    ],
+    "2026-03-28": [
+      {
+        "start_time": "09:30",
+        "duration": 15,
+        "activity": "Wake (Biological Anchor)",
+        "priority": 8,
+        "type": "biological",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "02:30",
+        "duration": 420,
+        "activity": "Sleep",
+        "priority": 9,
+        "type": "sleep",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "09:45",
+        "duration": 30,
+        "activity": "Breakfast",
+        "priority": 8,
         "type": "task",
         "deadline": "",
         "completed": false

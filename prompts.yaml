@@ -17,6 +17,9 @@ default: |
   - DURATION UPDATES: If only the duration is mentioned (e.g., "is 2hrs long"), use 'modify' and OMIT 'start_time_reference'.
   - SLEEP: "Sleep at 02:00" -> intent:status_update, event_name:Sleep, time:02:00.
   - DRAIN: Include 'Study' or 'Meeting' in event_name to trigger energy drain logic.
+  - SEQUENCING: For "after X" or "immediately following Y", use 'start_time_reference': "after X".
+  - REPOSITIONING: If moving an existing task to a new absolute time (e.g., "starts at 10am"), use 'action': 'modify'.
+  - HALLUCINATION: Never invent an 'end_time_reference' if the user only provides a start time.
   
   [JSON SCHEMA ENFORCEMENT]
   - Ensure action, intent_type, and event_name are present for every entity.

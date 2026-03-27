@@ -155,17 +155,17 @@ class LogicEngine:
 
     def _init_day(self, target_date: str):
         """Ensures a date entry exists and runs daily biological checks."""
-        if hasattr(self, "_in_init") and self._in_init == target_date:
+        if hasattr(self, "_in_init_lock") and self._in_init_lock == target_date:
             return
         
         if target_date not in self.schedule_db:
             self.schedule_db[target_date] = []
             
-        self._in_init = target_date
+        self._in_init_lock = target_date
         try:
             self._inject_daily_biological_anchors(target_date)
         finally:
-            self._in_init = None
+            self._in_init_lock = None
 
     def _inject_daily_biological_anchors(self, target_date: str):
         """Ensures Sleep, Wake, and Meals exist. Re-injects placeholders if missing."""
@@ -335,12 +335,45 @@ class LogicEngine:
         priority_map = {"delete": 0, "modify": 1, "create": 2}
         sorted_intents = sorted(data.intents, key=lambda x: priority_map.get(x.action, 2))
         
+        # 1. Initialize days for all intents
+        target_dates = set()
+        for intent in data.intents:
+            target_date = date.today().isoformat()
+            if intent.date_reference:
+                ref = intent.date_reference.lower()
+                if "tomorrow" in ref:
+                    target_date = (date.today() + timedelta(days=1)).isoformat()
+                elif "today" in ref:
+                    target_date = date.today().isoformat()
+                else:
+                    try: 
+                        target_date = date.fromisoformat(ref).isoformat()
+                    except ValueError: 
+                        pass
+            target_dates.add(target_date)
+        
+        for d in target_dates:
+            self._init_day(d)
+
         for intent in sorted_intents:
-            self._execute_intent(intent)
+            # Infer date for this specific intent to pass to executor
+            target_date = date.today().isoformat()
+            if intent.date_reference:
+                ref = intent.date_reference.lower()
+                if "tomorrow" in ref:
+                    target_date = (date.today() + timedelta(days=1)).isoformat()
+                elif "today" in ref:
+                    target_date = date.today().isoformat()
+                else:
+                    try: target_date = date.fromisoformat(ref).isoformat()
+                    except ValueError: pass
+            
+            self._execute_intent(intent, target_date=target_date)
         self._save_state()
 
-    def _time_to_minutes(self, hhmm: str) -> int:
+    def _time_to_minutes(self, hhmm: Optional[str]) -> int:
         """Converts HH:MM string to absolute minutes from midnight."""
+        if not hhmm or ":" not in hhmm: return 0
         try:
             h, m = map(int, hhmm.split(':'))
             return h * 60 + m
@@ -387,10 +420,32 @@ class LogicEngine:
             log.error(f"Error in execute_schedule_command bridge: {e}")
             return False
 
-    def _parse_time_reference(self, ref: str, base_time: Optional[str] = None) -> Optional[str]:
+    def _parse_time_reference(self, ref: str, base_time: Optional[str] = None, target_date: Optional[str] = None) -> Optional[str]:
         """Parses keywords, absolute times, and relative or hybrid offsets (19:30 +1h)."""
         if not ref: return None
         ref = ref.lower().strip().replace('.', ':')
+
+        # 1. Handle Sequential Anchors ("after math class")
+        if ref.startswith("after "):
+            event_query = ref[6:].strip()
+            # Use provided target_date or default to today
+            d_str = target_date or date.today().isoformat()
+            tasks = self.schedule_db.get(d_str, [])
+            
+            # Find the target event (Fuzzy match)
+            target = next((t for t in tasks if event_query in t['activity'].lower() or t['activity'].lower() in event_query), None)
+            
+            if target:
+                # Calculate end time: start_time + duration
+                sm = self._time_to_minutes(target['start_time'])
+                em = sm + target['duration']
+                em %= 1440
+                res = f"{em // 60:02d}:{em % 60:02d}"
+                log.info(f"Sequential Resolve: '{ref}' on {d_str} -> {res} (after {target['activity']})")
+                return res
+            else:
+                log.warning(f"Sequential Resolve Failed: Could not find '{event_query}' on {d_str}. Defaulting to current time.")
+                return datetime.now().strftime("%H:%M")
         
         # 1. Handle Hybrid/Relative Offsets
         if '+' in ref or '-' in ref:
@@ -405,9 +460,9 @@ class LogicEngine:
                     base_candidate = ref[:op_idx].strip()
                     delta_candidate = ref[op_idx:].strip()
                     # Resolve base part first
-                    resolved_base = self._parse_time_reference(base_candidate, base_time=base_time)
+                    resolved_base = self._parse_time_reference(base_candidate, base_time=base_time, target_date=target_date)
                     if not resolved_base: return None
-                    return self._parse_time_reference(delta_candidate, base_time=resolved_base)
+                    return self._parse_time_reference(delta_candidate, base_time=resolved_base, target_date=target_date)
 
                 # Parse delta (e.g., 1h, 30m, 90)
                 delta_mins = 0
@@ -464,26 +519,20 @@ class LogicEngine:
                     
         return None
 
-    def _execute_intent(self, intent: UserIntent) -> bool:
+    def _execute_intent(self, intent: UserIntent, target_date: Optional[str] = None) -> bool:
         """Internal executor for a single UserIntent."""
         now = datetime.now()
-        target_date = date.today().isoformat()
         name = intent.event_name.lower()
         
-        # 1. DATE INFERENCE (Explicit vs Duration-Aware Guessing)
-        if intent.date_reference:
-            ref = intent.date_reference.lower()
-            if "tomorrow" in ref:
-                target_date = (date.today() + timedelta(days=1)).isoformat()
-            elif "today" in ref:
-                target_date = date.today().isoformat()
-            else:
-                try:
-                    target_date = date.fromisoformat(ref).isoformat()
-                except ValueError:
-                    pass
+        # 1. DATE INFERENCE (Now handled batch-wise in process_parsed_input)
+        # Use target_date already inferred by batch processor if possible, 
+        # or fall back to today.
         
-        self._init_day(target_date)
+        if not target_date:
+             target_date = date.today().isoformat()
+             self._init_day(target_date) # Safety fallback
+        
+        # (Initialization is now handled batch-wise in process_parsed_input)
 
         # 2. CONTROLLED DELETIONS/MODIFICATIONS (Context-Aware Base Time)
         base_time_for_delta = None
@@ -522,25 +571,9 @@ class LogicEngine:
                 log.info(f"Auto-corrected date keyword '{s_ref}' from time field.")
             else:
                 # Use base_time_for_delta if it's a modify action and we found a task
-                parsed = self._parse_time_reference(intent.start_time_reference, base_time=base_time_for_delta)
+                parsed = self._parse_time_reference(intent.start_time_reference, base_time=base_time_for_delta, target_date=target_date)
                 if parsed:
                     intent.start_time_reference = parsed
-
-        # Duration-aware date fallback (if no explicit date given)
-        if not intent.date_reference and intent.start_time_reference and ":" in intent.start_time_reference:
-            try:
-                h, m = map(int, intent.start_time_reference.split(':'))
-                duration = intent.duration_minutes or 60
-                # Check if it completely ended in the past
-                if h * 60 + m + duration < now.hour * 60 + now.minute:
-                    target_date = (date.today() + timedelta(days=1)).isoformat()
-                    log.info(f"Target complete past. Shifting '{intent.event_name}' to tomorrow ({target_date}).")
-                elif h == 0 and m == 0 and now.hour >= 21:
-                    target_date = (date.today() + timedelta(days=1)).isoformat()
-            except Exception:
-                pass
-
-        self._init_day(target_date)
 
         # 3. IDEMPOTENT DEDUPLICATION & DELETION
         # If action is 'create', we check if a similar task already exists.
@@ -585,10 +618,12 @@ class LogicEngine:
             
         # 3.5 HALLUCINATION GUARD: If AI sends action:create for a known task name, 
         # but hallucinations a start time that differs by > 90m, we force-reconcile it.
-        # EXCEPTION: Biological anchors (Sleep/Wake) and explicit shifts.
+        # EXCEPTION: Biological anchors (Sleep/Wake), explicit re-definitions, and 'modify' actions.
         if found and intent.action == "create" and intent.start_time_reference:
             is_bio = any(b in name for b in ["sleep", "wake", "bedtime"])
-            if not is_bio:
+            is_explicit = intent.end_time_reference is not None or intent.duration_minutes is not None
+            
+            if not is_bio and not is_explicit:
                 it_m = self._time_to_minutes(intent.start_time_reference)
                 bt_m = self._time_to_minutes(base_time_for_delta)
                 # Handle wrap-around (1440m)
@@ -609,7 +644,7 @@ class LogicEngine:
         # --- GLOBAL BIOLOGICAL INTERCEPT ---
         if "sleep" in name or "bedtime" in name:
             # Resolve Sleep Start Time
-            sleep_start_str = self._parse_time_reference(intent.start_time_reference or "23:00")
+            sleep_start_str = self._parse_time_reference(intent.start_time_reference or "23:00", target_date=target_date)
             if not sleep_start_str: sleep_start_str = "23:00"
             
             # Triggers automatic realignment
@@ -619,8 +654,8 @@ class LogicEngine:
 
         # --- AUTO-DURATION CALCULATOR ---
         if intent.start_time_reference and intent.end_time_reference:
-            s_str = self._parse_time_reference(intent.start_time_reference)
-            e_str = self._parse_time_reference(intent.end_time_reference)
+            s_str = self._parse_time_reference(intent.start_time_reference, target_date=target_date)
+            e_str = self._parse_time_reference(intent.end_time_reference, target_date=target_date)
             if s_str and e_str:
                 sm = self._time_to_minutes(s_str)
                 em = self._time_to_minutes(e_str)
@@ -1007,6 +1042,14 @@ class LogicEngine:
         elif ":" in window: # Specific time like "00:00"
             wh, wm = map(int, window.split(':'))
             w_start = wh * 60 + wm
+            
+            # --- HIGH PRIORITY OVERRIDE ---
+            # If a specific time is requested and priority is P9+, we try to FORCE the slot
+            # instead of skipping past existing blocks. This enables "pushing" behavior.
+            if priority >= 9:
+                log.info(f"Priority Override: Attempting to force slot at {window} for '{activity}'")
+                if self._force_slot(target_date, window, duration, activity, priority, "task", deadline):
+                    return True
             
         # Get existing blocks
         blocks = []
