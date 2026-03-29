@@ -14,20 +14,29 @@ from .theme import *
 from .panels import LeftPanel, ChatPanel, RightPanel
 from .boot_overlay import BootOverlay
 from .workers import AiWorker, DiagnosticsWorker, ReminderWorker, BootWorker
+from .dialogs import ModelSwitcherDialog, DeviceToggleDialog, HelpDialog
 
 import logging
 log = logging.getLogger("normandy.window")
 
 RESIZE_MARGIN = 8   # px from window edge for resize detection
 
+# Default panel widths
+_W_LEFT  = 260
+_W_CHAT  = 700
+_W_RIGHT = 280
+
 
 class TitleBar(QWidget):
-    """Custom drag-able title bar with window controls."""
+    """Custom drag-able title bar with window controls and tactical action buttons."""
 
     close_clicked    = pyqtSignal()
     minimize_clicked = pyqtSignal()
     toggle_left      = pyqtSignal()
     toggle_right     = pyqtSignal()
+    open_models      = pyqtSignal()
+    open_device      = pyqtSignal()
+    open_help        = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,32 +45,40 @@ class TitleBar(QWidget):
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(8, 0, 8, 0)
-        lay.setSpacing(6)
+        lay.setSpacing(4)
 
-        # Left toggle
+        # ── Left panel toggle ──
         self._btn_left = self._ctrl_btn("◀", "Toggle Intel Panel")
         self._btn_left.clicked.connect(self.toggle_left)
         lay.addWidget(self._btn_left)
 
-        # Title
+        # ── Title ──
         self._title = QLabel("◈  ALLIANCE TERMINAL V3  ◈")
         self._title.setFont(font_orbitron(9, QFont.Weight.Bold))
         self._title.setStyleSheet(f"color:{C_CYAN}; letter-spacing:5px; background:transparent;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._title, 1)
 
-        # Status badge
-        self._status = QLabel("BOOTING")
-        self._status.setFont(font_orbitron(7))
-        self._status.setStyleSheet(f"color:{C_GOLD}; letter-spacing:2px; background:transparent;")
-        lay.addWidget(self._status)
+        # ── Tactical action buttons ──
+        self._btn_model  = self._action_btn("◈ MODEL",   "Switch AI Core")
+        self._btn_device = self._action_btn("⬡ NPU/iGPU", "Switch Target Silicon")
+        self._btn_help   = self._action_btn("? MANUAL",  "Open Tactical Manual")
+        self._btn_model .clicked.connect(self.open_models)
+        self._btn_device.clicked.connect(self.open_device)
+        self._btn_help  .clicked.connect(self.open_help)
+        for b in (self._btn_model, self._btn_device, self._btn_help):
+            lay.addWidget(b)
 
-        # Right toggle
+        lay.addSpacing(6)
+
+        # ── Right panel toggle ──
         self._btn_right = self._ctrl_btn("▶", "Toggle Operations")
         self._btn_right.clicked.connect(self.toggle_right)
         lay.addWidget(self._btn_right)
 
-        # Window controls
+        lay.addSpacing(4)
+
+        # ── Window controls ──
         for label, signal in [("─", self.minimize_clicked), ("✕", self.close_clicked)]:
             btn = QPushButton(label)
             btn.setFixedSize(28, 24)
@@ -89,6 +106,26 @@ class TitleBar(QWidget):
         """)
         return btn
 
+    def _action_btn(self, text: str, tip: str) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setFont(font_orbitron(7, QFont.Weight.Bold))
+        btn.setFixedHeight(24)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setToolTip(tip)
+        btn.setStyleSheet(f"""
+            QPushButton{{
+                background: transparent; color: {C_TEXT_DIM};
+                border: 1px solid {C_BORDER}; border-radius: 3px;
+                padding: 0 8px;
+                font-family: {S_ORBITRON}; font-size: 7px; letter-spacing: 1px;
+            }}
+            QPushButton:hover{{
+                color: {C_CYAN}; border-color: {C_BORDER_LIT};
+                background: rgba(0,229,255,0.08);
+            }}
+        """)
+        return btn
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.window().pos()
@@ -105,15 +142,9 @@ class TitleBar(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        # Background is already drawn by parent (AllianceTerminal)
-        # We only draw the separator line at the bottom
         p.setPen(QColor(0, 180, 200, 120))
         p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
         p.end()
-
-    def set_status(self, text: str, color: str = C_GREEN):
-        self._status.setText(text)
-        self._status.setStyleSheet(f"color:{color}; letter-spacing:2px; background:transparent;")
 
 
 class AllianceTerminal(QWidget):
@@ -132,14 +163,13 @@ class AllianceTerminal(QWidget):
         self._right_visible = True
         self._ai_worker: AiWorker | None = None
 
-        # ── Window flags (frameless + resizable via manual hit-test) ──
+        # ── Window flags ──
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMinimumSize(900, 580)
         self.resize(1280, 780)
         self.setWindowTitle("ALLIANCE TERMINAL V3")
 
-        # Mouse tracking for resize cursors
         self.setMouseTracking(True)
         self._resize_dir: str | None = None
         self._resize_start_pos: QPoint | None = None
@@ -156,6 +186,9 @@ class AllianceTerminal(QWidget):
         self._titlebar.minimize_clicked.connect(self.showMinimized)
         self._titlebar.toggle_left.connect(self._toggle_left)
         self._titlebar.toggle_right.connect(self._toggle_right)
+        self._titlebar.open_models.connect(self._open_model_switcher)
+        self._titlebar.open_device.connect(self._open_device_toggle)
+        self._titlebar.open_help.connect(self._open_help)
         root.addWidget(self._titlebar)
 
         # ── Stacked widget: boot overlay | main content ──
@@ -174,7 +207,7 @@ class AllianceTerminal(QWidget):
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setHandleWidth(2)
-        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setChildrenCollapsible(True)
 
         self._left_panel  = LeftPanel()
         self._chat_panel  = ChatPanel()
@@ -183,7 +216,7 @@ class AllianceTerminal(QWidget):
         self._splitter.addWidget(self._left_panel)
         self._splitter.addWidget(self._chat_panel)
         self._splitter.addWidget(self._right_panel)
-        self._splitter.setSizes([260, 700, 280])
+        self._splitter.setSizes([_W_LEFT, _W_CHAT, _W_RIGHT])
         self._splitter.setStretchFactor(1, 1)
 
         content_lay.addWidget(self._splitter)
@@ -206,11 +239,10 @@ class AllianceTerminal(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = 10  # window corner radius
+        r = 10
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width(), self.height(), r, r)
         p.fillPath(path, BG)
-        # Border
         p.setPen(QColor(0, 180, 200, 100))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
@@ -225,7 +257,6 @@ class AllianceTerminal(QWidget):
         self._boot_worker.start()
 
     def _on_boot_done(self):
-        self._titlebar.set_status("BOOT COMPLETE", C_GREEN)
         self._boot.fade_out()
         QTimer.singleShot(800, self._switch_to_main)
 
@@ -241,7 +272,6 @@ class AllianceTerminal(QWidget):
         self._diag_worker = DiagnosticsWorker(interval_sec=5)
         self._diag_worker.stats_ready.connect(self._left_panel.update_diagnostics)
         self._diag_worker.start()
-        # Device info (one-shot)
         try:
             info = self._ai.get_device_info()
             self._left_panel.update_device_info(info)
@@ -296,9 +326,8 @@ class AllianceTerminal(QWidget):
 
     def _on_message_sent(self, text: str):
         if self._ai_worker and self._ai_worker.isRunning():
-            return  # busy
+            return
 
-        # Handle /forget command
         if text.strip().lower().startswith("/forget"):
             target = text.strip()[7:].strip()
             if self._memory.delete_fact(target):
@@ -308,7 +337,6 @@ class AllianceTerminal(QWidget):
             return
 
         self._chat_panel.start_generation(text)
-        self._titlebar.set_status("PROCESSING", C_GOLD)
 
         self._ai_worker = AiWorker(self._ai, self._memory, self._logic, text)
         self._ai_worker.token_streamed.connect(self._chat_panel.on_token)
@@ -318,9 +346,7 @@ class AllianceTerminal(QWidget):
 
     def _on_generation_done(self, result: dict):
         self._chat_panel.on_generation_done(result)
-        self._titlebar.set_status("ONLINE", C_GREEN)
 
-        # Refresh whichever panels need updating
         if result.get("schedule_updated"):
             self._refresh_mood()
             self._refresh_schedule()
@@ -332,7 +358,7 @@ class AllianceTerminal(QWidget):
                 pass
         if result.get("tasks_updated"):
             self._refresh_tasks()
-            self._refresh_schedule()     # auto-scheduled tasks appear here too
+            self._refresh_schedule()
         if result.get("reminders_updated"):
             self._refresh_reminders()
             self._left_panel.switch_to_tab("REMINDERS")
@@ -352,15 +378,58 @@ class AllianceTerminal(QWidget):
         self._logic.dismiss_reminder(reminder_id)
         self._refresh_reminders()
 
-    # ── Panel toggles ─────────────────────────────────────────────────────────
+    # ── Panel toggles (inward collapse — chat panel stays stable) ─────────────
 
     def _toggle_left(self):
         self._left_visible = not self._left_visible
-        self._left_panel.setVisible(self._left_visible)
+        sizes = self._splitter.sizes()
+        chat_w = sizes[1]
+        if self._left_visible:
+            # Restore left panel, take space back from chat
+            self._splitter.setSizes([_W_LEFT, max(chat_w - _W_LEFT, 400), sizes[2]])
+        else:
+            # Collapse left panel inward — give its space back to itself only
+            self._splitter.setSizes([0, chat_w, sizes[2]])
 
     def _toggle_right(self):
         self._right_visible = not self._right_visible
-        self._right_panel.setVisible(self._right_visible)
+        sizes = self._splitter.sizes()
+        chat_w = sizes[1]
+        if self._right_visible:
+            self._splitter.setSizes([sizes[0], max(chat_w - _W_RIGHT, 400), _W_RIGHT])
+        else:
+            self._splitter.setSizes([sizes[0], chat_w, 0])
+
+    # ── Dialog openers ────────────────────────────────────────────────────────
+
+    def _open_model_switcher(self):
+        dlg = ModelSwitcherDialog(self)
+        dlg.model_selected.connect(self._on_model_selected)
+        dlg.exec()
+
+    def _on_model_selected(self, key: str):
+        # Inform user — full reload requires restart
+        self._chat_panel.on_generation_done({
+            "response": f"<span style='color:{C_GOLD}'>◈ TACTICAL CORE SWAP</span><br>"
+                        f"Core <b>{key}</b> set as active in config.json. "
+                        f"<span style='color:{C_TEXT_DIM}'>Restart the terminal for the new core to engage.</span>"
+        })
+
+    def _open_device_toggle(self):
+        dlg = DeviceToggleDialog(self)
+        dlg.device_changed.connect(self._on_device_changed)
+        dlg.exec()
+
+    def _on_device_changed(self, device: str):
+        self._chat_panel.on_generation_done({
+            "response": f"<span style='color:{C_GOLD}'>⬡ SILICON TARGET UPDATED</span><br>"
+                        f"Device priority set to <b>{device}</b>. "
+                        f"<span style='color:{C_TEXT_DIM}'>Restart the terminal for changes to take effect.</span>"
+        })
+
+    def _open_help(self):
+        dlg = HelpDialog(self)
+        dlg.exec()
 
     # ── Resize handling (frameless window) ───────────────────────────────────
 
@@ -423,7 +492,6 @@ class AllianceTerminal(QWidget):
             event.accept()
             return
 
-        # Update cursor
         d = self._get_resize_dir(pos)
         if d:
             self.setCursor(QCursor(self._CURSORS[d]))

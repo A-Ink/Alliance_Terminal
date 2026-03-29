@@ -1477,19 +1477,22 @@ class LogicEngine:
         }
 
     def get_schedule_tasks(self) -> list:
-        """Returns the flat list of today's schedule tasks (sorted by time) for the UI."""
+        """Returns a 36-hour window of schedule tasks (12h past, 24h future) with free-time blocks."""
         from datetime import datetime as _dt, timedelta as _td
-        now = _dt.now()
-        start_win = now - _td(hours=2)
+        now       = _dt.now()
+        start_win = now - _td(hours=12)
         end_win   = now + _td(hours=24)
 
-        dates = [(now + _td(days=i)).date().isoformat() for i in [-1, 0, 1]]
+        dates = [(now + _td(days=i)).date().isoformat() for i in [-1, 0, 1, 2]]
         result = []
         for d_str in dates:
             for t in self.schedule_db.get(d_str, []):
                 if "start_time" not in t:
                     continue
-                h, m = map(int, t["start_time"].split(":"))
+                try:
+                    h, m = map(int, t["start_time"].split(":"))
+                except ValueError:
+                    continue
                 dt = _dt.fromisoformat(d_str).replace(hour=h, minute=m)
                 if start_win <= dt <= end_win:
                     t_copy = t.copy()
@@ -1497,7 +1500,28 @@ class LogicEngine:
                     result.append(t_copy)
 
         result.sort(key=lambda x: x["_dt"])
-        return result
+
+        # ── Inject FREE TIME blocks between events ──
+        MIN_GAP = 10  # minutes — only show gaps larger than this
+        enriched = []
+        for i, task in enumerate(result):
+            enriched.append(task)
+            if i < len(result) - 1:
+                t_end_m  = _dt.fromisoformat(task["_dt"]) + _td(minutes=task.get("duration", 0))
+                t_next   = _dt.fromisoformat(result[i + 1]["_dt"])
+                gap_mins = int((t_next - t_end_m).total_seconds() / 60)
+                if gap_mins >= MIN_GAP:
+                    free_block = {
+                        "activity":   "FREE TIME",
+                        "type":       "free",
+                        "start_time": t_end_m.strftime("%H:%M"),
+                        "duration":   gap_mins,
+                        "priority":   0,
+                        "_dt":        t_end_m.isoformat(),
+                    }
+                    enriched.append(free_block)
+
+        return enriched
 
 # --- MODULE TEST / USAGE EXAMPLES ---
 if __name__ == "__main__":

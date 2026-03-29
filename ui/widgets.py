@@ -508,67 +508,100 @@ class ReminderItem(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ScheduleEntry(QWidget):
+    """Schedule entry row. Active events glow green; free-time blocks are muted."""
+
     def __init__(self, task: dict, is_active: bool = False, parent=None):
         super().__init__(parent)
-        self._active = is_active
+        self._active   = is_active
+        self._is_free  = task.get("type") == "free"
+        self._glow_val = 0.3          # oscillates for active glow
+        self._glow_dir = 1
+
         self.setMaximumHeight(40)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(6, 3, 6, 3)
+        lay.setContentsMargins(10 if self._is_free else 6, 3, 6, 3)
         lay.setSpacing(8)
 
-        # Active indicator dot
-        if is_active:
-            self._dot = QLabel("◈")
-            self._dot.setFont(font_orbitron(9))
-            self._dot.setFixedWidth(14)
-            self._dot.setStyleSheet(f"color: {C_CYAN}; background: transparent;")
-            lay.addWidget(self._dot)
-            self._blink_t = QTimer(self)
-            self._blink_t.timeout.connect(self._blink)
-            self._blink_t.start(700)
-            self._blink_state = True
-        else:
-            sp = QLabel()
-            sp.setFixedWidth(14)
-            sp.setStyleSheet("background: transparent;")
-            lay.addWidget(sp)
-
-        # Time
+        # ── Time label ──
         t_type = task.get("type", "task")
-        dim    = t_type in ("sleep", "biological", "meal", "wake")
-        t_lbl  = QLabel(task.get("start_time", "--:--"))
+        if self._is_free:
+            t_col = C_TEXT_DIM
+        elif is_active:
+            t_col = C_GREEN
+        elif t_type in ("sleep", "biological", "meal", "wake"):
+            t_col = C_TEXT_DIM
+        else:
+            t_col = C_CYAN
+
+        t_lbl = QLabel(task.get("start_time", "--:--"))
         t_lbl.setFont(font_orbitron(10, QFont.Weight.Bold))
-        t_lbl.setStyleSheet(f"color: {C_TEXT_DIM if dim else C_CYAN}; background: transparent; letter-spacing: 1px;")
+        t_lbl.setStyleSheet(f"color: {t_col}; background: transparent; letter-spacing: 1px;")
         t_lbl.setFixedWidth(48)
         lay.addWidget(t_lbl)
 
-        # Activity
+        # ── Activity label ──
         act = task.get("activity", "")
         if task.get("completed"):
             act = f"[DONE] {act}"
+
         a_lbl = QLabel(act)
-        a_lbl.setFont(font_body(11))
-        col = C_TEXT_BRIGHT if is_active else (C_TEXT_DIM if task.get("completed") else C_TEXT)
-        a_lbl.setStyleSheet(f"color: {col}; background: transparent;")
+        if self._is_free:
+            a_lbl.setFont(font_body(10))
+            a_lbl.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent; font-style: italic;")
+        else:
+            a_lbl.setFont(font_body(11))
+            col = C_GREEN if is_active else (C_TEXT_DIM if task.get("completed") else C_TEXT)
+            a_lbl.setStyleSheet(f"color: {col}; background: transparent;")
         lay.addWidget(a_lbl, 1)
 
-        # Duration
-        dur   = task.get("duration", 0)
-        pr    = task.get("priority", 5)
+        # ── Duration / priority badge ──
+        dur = task.get("duration", 0)
+        pr  = task.get("priority", 5)
         d_lbl = QLabel(f"{dur}m")
         d_lbl.setFont(font_mono(9))
-        d_lbl.setStyleSheet(f"color: {priority_color(pr)}; background: transparent;")
+        if self._is_free:
+            d_lbl.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent;")
+        else:
+            d_lbl.setStyleSheet(f"color: {priority_color(pr)}; background: transparent;")
         lay.addWidget(d_lbl)
 
-        bg = "rgba(0,229,255,0.07)" if is_active else "transparent"
-        self.setStyleSheet(f"border-bottom: 1px solid {C_BORDER}; background: {bg};")
+        # Base background
+        if is_active:
+            bg = "rgba(0,255,136,0.07)"
+        elif self._is_free:
+            bg = "rgba(0,0,0,0.0)"
+        else:
+            bg = "transparent"
 
-    def _blink(self):
-        self._blink_state = not self._blink_state
-        col = C_CYAN if self._blink_state else C_BG
-        self._dot.setStyleSheet(f"color: {col}; background: transparent;")
+        sep_col = C_BORDER if not self._is_free else "transparent"
+        self.setStyleSheet(f"border-bottom: 1px solid {sep_col}; background: {bg};")
+
+        # ── Glow animation for active entries ──
+        if is_active:
+            self._glow_t = QTimer(self)
+            self._glow_t.timeout.connect(self._tick_glow)
+            self._glow_t.start(40)   # ~25fps smooth pulse
+
+    def _tick_glow(self):
+        self._glow_val += 0.03 * self._glow_dir
+        if self._glow_val >= 0.85:
+            self._glow_dir = -1
+        elif self._glow_val <= 0.25:
+            self._glow_dir = 1
+        self.update()  # triggers paintEvent
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._active:
+            return
+        # Draw a glowing left-edge bar
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        alpha = int(self._glow_val * 255)
+        p.fillRect(0, 0, 3, self.height(), QColor(0, 255, 136, alpha))
+        p.end()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

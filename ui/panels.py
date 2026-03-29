@@ -235,10 +235,6 @@ class ChatPanel(QWidget):
         tl.setStyleSheet(f"color: {C_CYAN}; letter-spacing: 4px; background: transparent;")
         title_row.addWidget(tl)
         title_row.addStretch()
-        self._online_badge = QLabel("● ONLINE")
-        self._online_badge.setFont(font_orbitron(7))
-        self._online_badge.setStyleSheet(f"color: {C_GREEN}; letter-spacing: 2px; background: transparent;")
-        title_row.addWidget(self._online_badge)
         root.addLayout(title_row)
 
         # Separator
@@ -392,8 +388,6 @@ class ChatPanel(QWidget):
     def start_generation(self, user_text: str):
         self._busy = True
         self._send_btn.setEnabled(False)
-        self._online_badge.setText("● PROCESSING")
-        self._online_badge.setStyleSheet(f"color: {C_GOLD}; letter-spacing: 2px; background: transparent;")
 
         self._thinking = ThinkingDots()
         self._chat_inner_lay.addWidget(self._thinking)
@@ -424,8 +418,6 @@ class ChatPanel(QWidget):
         self._current_bubble = None
         self._busy = False
         self._send_btn.setEnabled(True)
-        self._online_badge.setText("● ONLINE")
-        self._online_badge.setStyleSheet(f"color: {C_GREEN}; letter-spacing: 2px; background: transparent;")
         QTimer.singleShot(200, self._scroll_bottom)
 
     def on_generation_error(self, error: str):
@@ -438,8 +430,6 @@ class ChatPanel(QWidget):
             self._current_bubble = None
         self._busy = False
         self._send_btn.setEnabled(True)
-        self._online_badge.setText("● ONLINE")
-        self._online_badge.setStyleSheet(f"color: {C_GREEN}; letter-spacing: 2px; background: transparent;")
 
     def append_reminder(self, html: str):
         self._add_bubble(self.REMINDER, html, "reminder")
