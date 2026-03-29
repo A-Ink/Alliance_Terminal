@@ -1,5 +1,5 @@
 # ==========================================
-# ALLIANCE TERMINAL — DEPENDENCY MANIFEST
+# ALLIANCE TERMINAL V3 — DEPENDENCY MANIFEST
 # ==========================================
 
 # --- Core UI & Subsystems ---

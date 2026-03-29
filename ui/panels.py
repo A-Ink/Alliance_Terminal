@@ -1,5 +1,5 @@
 """
-Alliance Terminal — Panel Layouts
+Alliance Terminal Version 3 — UI Panels & Layouts
 Left (tabbed Codex/Tasks/Reminders), Center (Chat), Right (Mood + Schedule).
 Fonts: Orbitron headings · Montserrat body · Consolas mono.
 """

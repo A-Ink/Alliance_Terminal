@@ -1,5 +1,5 @@
 """
-Alliance Terminal — Boot Overlay Widget
+Alliance Terminal Version 3 — Boot Overlay Widget
 Full-screen sci-fi boot sequence with large fonts and fade-out animation.
 """
 
@@ -32,7 +32,7 @@ class BootOverlay(QWidget):
         c_lay.setSpacing(10)
 
         # Main title
-        title = QLabel("ALLIANCE TERMINAL")
+        title = QLabel("ALLIANCE TERMINAL V3")
         title.setFont(font_orbitron(32, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {C_CYAN}; letter-spacing: 10px; background: transparent;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)

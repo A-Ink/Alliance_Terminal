@@ -15,7 +15,7 @@ CONFIG_PATH = SCRIPT_DIR / "config.json"
 
 def print_header():
     print("=====================================================")
-    print("     ALLIANCE TERMINAL — ARMORY (Model Downloader)   ")
+    print("     ALLIANCE TERMINAL V3 — ARMORY (Model Downloader)   ")
     print("=====================================================")
 
 def load_config():

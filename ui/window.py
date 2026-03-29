@@ -1,5 +1,5 @@
 """
-Alliance Terminal — Main Application Window
+Alliance Terminal Version 3 — Main Application Window
 Frameless, resizable PyQt6 window with custom title bar.
 """
 
@@ -44,7 +44,7 @@ class TitleBar(QWidget):
         lay.addWidget(self._btn_left)
 
         # Title
-        self._title = QLabel("◈  ALLIANCE TERMINAL  ◈")
+        self._title = QLabel("◈  ALLIANCE TERMINAL V3  ◈")
         self._title.setFont(font_orbitron(9, QFont.Weight.Bold))
         self._title.setStyleSheet(f"color:{C_CYAN}; letter-spacing:5px; background:transparent;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -137,7 +137,7 @@ class AllianceTerminal(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMinimumSize(900, 580)
         self.resize(1280, 780)
-        self.setWindowTitle("ALLIANCE TERMINAL")
+        self.setWindowTitle("ALLIANCE TERMINAL V3")
 
         # Mouse tracking for resize cursors
         self.setMouseTracking(True)

@@ -1,5 +1,5 @@
 """
-Alliance Terminal — RAG Memory Manager
+Alliance Terminal Version 3 — RAG Memory Manager
 ChromaDB-backed vector database for Commander codex dossier facts.
 """
 

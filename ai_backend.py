@@ -1,5 +1,5 @@
 """
-Alliance Terminal — AI Backend
+Alliance Terminal Version 3 — AI Backend
 OpenVINO GenAI LLM pipeline with NPU-first routing.
 """
 

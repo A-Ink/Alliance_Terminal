@@ -1,5 +1,5 @@
 """
-Alliance Terminal — UI Theme
+Alliance Terminal Version 3 — Theme & Styling
 Centralized colors, fonts, and QSS stylesheets for the sci-fi dark aesthetic.
 Fonts: Orbitron (headings/labels) + Montserrat (body text).
 """

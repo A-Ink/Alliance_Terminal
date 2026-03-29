@@ -1,5 +1,5 @@
 """
-Alliance Terminal — Main Entry Point (PyQt6 Native UI)
+Alliance Terminal Version 3 — Main Entry Point (PyQt6 Native UI)
 
 Critical: OpenVINO NPU backend MUST be initialized on the main thread before the
 Qt event loop starts. Any attempt to call ov_genai.LLMPipeline() from a QThread
@@ -51,7 +51,7 @@ def _init_backends():
         print(f"  [{kind.upper():5s}] {safe}", flush=True)
         boot_log.append((text, kind))
 
-    record("[BOOT] Alliance Terminal v2.2 -- Boot Sequence Initiated", "info")
+    record("[BOOT] Alliance Terminal v3.0 -- Boot Sequence Initiated", "info")
     record("[SYS ] Native PyQt6 renderer .............. ONLINE", "ok")
 
     # ── AI backend ──
@@ -97,7 +97,7 @@ def _init_backends():
 
 
 def main():
-    print("\n=== ALLIANCE TERMINAL ===", flush=True)
+    print("\n=== ALLIANCE TERMINAL V3 ===", flush=True)
     print("Initializing backends on main thread (NPU requirement)...\n", flush=True)
 
     # ── Phase 1: Backend init on main thread ──────────────────────────────────
@@ -107,7 +107,7 @@ def main():
     # ── Phase 2: Qt Application ──────────────────────────────────────────────
     from PyQt6.QtWidgets import QApplication
     app = QApplication(sys.argv)
-    app.setApplicationName("Alliance Terminal")
+    app.setApplicationName("Alliance Terminal Version 3")
     app.setOrganizationName("N7")
 
     from ui.theme import load_fonts, global_stylesheet
@@ -119,7 +119,7 @@ def main():
     window = AllianceTerminal(ai, memory, logic, boot_log=boot_log)
     window.show()
 
-    log.info("Alliance Terminal launched.")
+    log.info("Alliance Terminal Version 3 launched.")
     sys.exit(app.exec())
 
 

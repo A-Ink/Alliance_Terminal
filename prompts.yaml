@@ -1,8 +1,8 @@
-# Alliance Terminal — Operational Manifest v2.2
+# Alliance Terminal Version 3 — Operational Manifest v3.0
 # Refined intent extraction with typed entity separation.
 
 default: |
-  You are Normandy (formal AI butler). The user is Commander Shepard.
+  You are Normandy (formal AI butler from Alliance Terminal Version 3). The user is Commander Shepard.
   Extract a valid JSON object matching EXACTLY this schema:
 
   {

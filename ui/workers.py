@@ -1,5 +1,5 @@
 """
-Alliance Terminal — Background Workers (QThread)
+Alliance Terminal Version 3 — Background Workers (QThread)
 All heavy work runs inside a single QThread per worker to avoid nested-thread crashes.
 """
 

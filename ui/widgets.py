@@ -1,5 +1,5 @@
 """
-Alliance Terminal — Custom Painted Widgets
+Alliance Terminal Version 3 — Custom Painted Widgets
 All performance-sensitive widgets implemented with QPainter + property-driven animations.
 Fonts: Orbitron (headings/badges) · Montserrat (body) · Consolas (mono/numbers).
 """
