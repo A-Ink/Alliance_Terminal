@@ -138,7 +138,104 @@
         "deadline": "",
         "completed": false
       }
+    ],
+    "2026-03-29": [
+      {
+        "start_time": "02:00",
+        "duration": 420,
+        "activity": "Sleep",
+        "priority": 9,
+        "type": "sleep",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "09:00",
+        "duration": 15,
+        "activity": "Wake (Biological Anchor)",
+        "priority": 8,
+        "type": "biological",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "09:15",
+        "duration": 30,
+        "activity": "Breakfast",
+        "priority": 8,
+        "type": "meal",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "13:00",
+        "duration": 60,
+        "activity": "Lunch",
+        "priority": 8,
+        "type": "meal",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "14:00",
+        "duration": 120,
+        "activity": "Computing Assignment 1",
+        "priority": 7,
+        "type": "task",
+        "deadline": "2026-04-06",
+        "completed": false
+      },
+      {
+        "start_time": "16:00",
+        "duration": 15,
+        "activity": "Snack",
+        "priority": 4,
+        "type": "meal",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "16:15",
+        "duration": 120,
+        "activity": "Math 1d Project",
+        "priority": 7,
+        "type": "task",
+        "deadline": "2026-04-06",
+        "completed": false
+      },
+      {
+        "start_time": "19:00",
+        "duration": 60,
+        "activity": "Dinner",
+        "priority": 8,
+        "type": "meal",
+        "deadline": "",
+        "completed": false
+      }
     ]
   },
-  "user_energy": 100
+  "user_energy": 100,
+  "tasks": [
+    {
+      "id": "ea915f98",
+      "name": "Computing Assignment 1",
+      "duration": 120,
+      "priority": 7,
+      "deadline": "2026-04-06",
+      "completed": false,
+      "auto_schedule": true,
+      "date": "2026-03-29"
+    },
+    {
+      "id": "213f67d3",
+      "name": "Math 1d Project",
+      "duration": 120,
+      "priority": 7,
+      "deadline": "2026-04-06",
+      "completed": false,
+      "auto_schedule": true,
+      "date": "2026-03-29"
+    }
+  ],
+  "reminders": []
 }

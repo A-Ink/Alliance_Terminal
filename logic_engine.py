@@ -41,8 +41,10 @@ class LogicEngine:
     def __init__(self, state_file: str = "schedule.json"):
         self.state_file = Path(SCRIPT_DIR / state_file)
         self.schedule_db: Dict[str, List[Dict[str, Any]]] = {}
+        self.tasks_db: List[Dict[str, Any]] = []          # NEW: flexible tasks
+        self.reminders_db: List[Dict[str, Any]] = []      # NEW: user reminders
         self.overflow_queue: List[Dict[str, Any]] = []
-        self.user_energy: int = 100  # Volatile base, boosted/cut by logic
+        self.user_energy: int = 100
         self._load_state()
 
     def _load_state(self):
@@ -51,13 +53,14 @@ class LogicEngine:
             try:
                 with open(self.state_file, 'r') as f:
                     data = json.load(f)
-                    # Support both legacy and new formats
                     if isinstance(data, dict) and "schedules" in data:
-                        self.schedule_db = data["schedules"]
-                        self.user_energy = data.get("user_energy", 100)
+                        self.schedule_db  = data["schedules"]
+                        self.user_energy  = data.get("user_energy", 100)
+                        self.tasks_db     = data.get("tasks", [])
+                        self.reminders_db = data.get("reminders", [])
                     else:
-                        self.schedule_db = data
-                        self.user_energy = 100
+                        self.schedule_db  = data
+                        self.user_energy  = 100
             except (json.JSONDecodeError, IOError):
                 self.schedule_db = {}
         else:
@@ -66,8 +69,10 @@ class LogicEngine:
     def _save_state(self):
         """Saves current state to disk."""
         data = {
-            "schedules": self.schedule_db,
-            "user_energy": self.user_energy
+            "schedules":  self.schedule_db,
+            "user_energy": self.user_energy,
+            "tasks":      self.tasks_db,
+            "reminders":  self.reminders_db,
         }
         with open(self.state_file, 'w') as f:
             json.dump(data, f, indent=2)
@@ -1112,6 +1117,284 @@ class LogicEngine:
                     high_intensity_mins += int(overlap_e - overlap_s)
                     
         return high_intensity_mins >= 240
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # NEW: TASK MANAGEMENT
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def execute_task_command(self, cmd: dict) -> bool:
+        """Handle task create/complete/delete from AI output."""
+        import uuid
+        from datetime import date as _date
+        action    = cmd.get("action", "create")
+        task_name = cmd.get("task_name", "Unknown Task")
+        today     = _date.today().isoformat()
+
+        if action == "create":
+            task_id = str(uuid.uuid4())[:8]
+            task = {
+                "id":              task_id,
+                "name":            task_name,
+                "duration":        cmd.get("duration_minutes") or 60,
+                "priority":        int(cmd.get("priority", 5)),
+                "deadline":        cmd.get("deadline") or "",
+                "completed":       False,
+                "auto_schedule":   cmd.get("auto_schedule", True),
+                "date":            today,
+            }
+            # Avoid duplication
+            names = [t["name"].lower() for t in self.tasks_db]
+            if task_name.lower() not in names:
+                self.tasks_db.append(task)
+                log.info(f"Task created: {task_name} (P{task['priority']})")
+                # Auto-schedule if requested
+                if task.get("auto_schedule"):
+                    self._init_day(today)
+                    self.queue_flexible(today, task_name, task["duration"], task["priority"], "now", task["deadline"])
+                self._save_state()
+                return True
+            return False
+
+        elif action == "complete":
+            for t in self.tasks_db:
+                if task_name.lower() in t["name"].lower() or t["name"].lower() in task_name.lower():
+                    t["completed"] = True
+                    log.info(f"Task completed: {t['name']}")
+                    self._save_state()
+                    return True
+            return False
+
+        elif action == "delete":
+            before = len(self.tasks_db)
+            self.tasks_db = [t for t in self.tasks_db
+                             if task_name.lower() not in t["name"].lower()]
+            if len(self.tasks_db) < before:
+                self._save_state()
+                return True
+            return False
+
+        return False
+
+    def mark_task_complete(self, task_id: str):
+        """Mark a task complete by ID (called from UI checkbox)."""
+        for t in self.tasks_db:
+            if t.get("id") == task_id:
+                t["completed"] = True
+                log.info(f"Task {task_id} marked complete via UI")
+                break
+        self._save_state()
+
+    def delete_task(self, task_id: str):
+        """Delete a task by ID (called from UI delete button)."""
+        self.tasks_db = [t for t in self.tasks_db if t.get("id") != task_id]
+        self._save_state()
+
+    def get_tasks_json(self) -> list:
+        """Return tasks for the UI (pending first, then completed)."""
+        pending   = [t for t in self.tasks_db if not t.get("completed")]
+        completed = [t for t in self.tasks_db if t.get("completed")]
+        # Sort pending by priority descending
+        pending.sort(key=lambda x: x.get("priority", 5), reverse=True)
+        return pending + completed
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # NEW: REMINDER MANAGEMENT
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def execute_reminder_command(self, cmd: dict) -> bool:
+        """Handle reminder create/dismiss from AI output."""
+        import uuid
+        from datetime import date as _date
+        action = cmd.get("action", "create")
+        text   = cmd.get("reminder_text", "")
+
+        if action == "create":
+            r_id   = str(uuid.uuid4())[:8]
+            remind_at = cmd.get("remind_at") or ""
+            date_ref  = cmd.get("date_reference", "today")
+            if date_ref == "tomorrow":
+                from datetime import timedelta
+                r_date = (_date.today() + timedelta(days=1)).isoformat()
+            else:
+                r_date = _date.today().isoformat()
+
+            reminder = {
+                "id":           r_id,
+                "text":         text,
+                "reminder_text": text,
+                "remind_at":    remind_at,
+                "date":         r_date,
+                "dismissed":    False,
+            }
+            self.reminders_db.append(reminder)
+            log.info(f"Reminder created: '{text}' @ {remind_at}")
+            self._save_state()
+            return True
+
+        elif action == "dismiss":
+            for r in self.reminders_db:
+                if text.lower() in r["text"].lower() or r["text"].lower() in text.lower():
+                    r["dismissed"] = True
+                    self._save_state()
+                    return True
+            return False
+
+        return False
+
+    def dismiss_reminder(self, reminder_id: str):
+        """Dismiss a reminder by ID (called from UI)."""
+        for r in self.reminders_db:
+            if r.get("id") == reminder_id:
+                r["dismissed"] = True
+                break
+        self._save_state()
+
+    def get_reminders_json(self) -> list:
+        """Return active (non-dismissed) reminders for UI."""
+        return [r for r in self.reminders_db if not r.get("dismissed")]
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # NEW: SLEEP/WAKE UPDATE HANDLER
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def process_sleep_wake_update(self, update: dict) -> bool:
+        """
+        Dedicated handler for sleep/wake time reports.
+        Updates biological anchors and recalculates energy.
+        """
+        from datetime import date as _date, timedelta as _td
+        if not update:
+            return False
+
+        date_ref  = update.get("date_reference", "today")
+        sleep_str = update.get("sleep_time") or ""
+        wake_str  = update.get("wake_time") or ""
+
+        if date_ref == "yesterday":
+            target_date = (_date.today() - _td(days=1)).isoformat()
+        else:
+            target_date = _date.today().isoformat()
+
+        self._init_day(target_date)
+        changed = False
+
+        if sleep_str:
+            parsed = self._parse_time_reference(sleep_str)
+            if parsed:
+                sleep_event = next(
+                    (t for t in self.schedule_db.get(target_date, [])
+                     if "sleep" in t["activity"].lower()), None
+                )
+                if sleep_event:
+                    old = sleep_event["start_time"]
+                    sleep_event["start_time"] = parsed
+                    log.info(f"Sleep time updated: {old} → {parsed} on {target_date}")
+                else:
+                    self._force_slot(target_date, parsed, 420, "Sleep", 9, "sleep")
+                    log.info(f"Sleep anchor injected at {parsed} on {target_date}")
+                changed = True
+
+        if wake_str:
+            dt_now = datetime.now()
+            # If wake_str == "now", use actual current time
+            if wake_str.lower() in ("now", "just now"):
+                wake_str = dt_now.strftime("%H:%M")
+            parsed = self._parse_time_reference(wake_str)
+            if parsed:
+                wake_event = next(
+                    (t for t in self.schedule_db.get(target_date, [])
+                     if "wake" in t["activity"].lower()), None
+                )
+                if wake_event:
+                    old = wake_event["start_time"]
+                    wake_event["start_time"] = parsed
+                    log.info(f"Wake time updated: {old} → {parsed} on {target_date}")
+                else:
+                    self._force_slot(target_date, parsed, 15, "Wake (Biological Anchor)", 8, "biological")
+                    log.info(f"Wake anchor injected at {parsed} on {target_date}")
+                changed = True
+
+        if changed:
+            # Recalculate sleep duration if we have both anchors
+            tasks = self.schedule_db.get(target_date, [])
+            sleep_ev = next((t for t in tasks if "sleep" in t["activity"].lower()), None)
+            wake_ev  = next((t for t in tasks if "wake"  in t["activity"].lower()), None)
+            if sleep_ev and wake_ev:
+                s_m = self._time_to_minutes(sleep_ev["start_time"])
+                w_m = self._time_to_minutes(wake_ev["start_time"])
+                if w_m < s_m:   # crosses midnight
+                    w_m += 1440
+                sleep_ev["duration"] = max(30, w_m - s_m)
+                log.info(f"Sleep duration recalculated: {sleep_ev['duration']}m")
+
+            self._align_biological_anchors(target_date)
+            # Recompute energy penalty based on new debt
+            debt = self._calculate_sleep_debt(target_date)
+            debt_penalty = int((debt / 60) * 5)
+            self.user_energy = max(0, 100 - debt_penalty)
+            log.info(f"Energy recalculated after wake update: {self.user_energy} (debt={debt}m)")
+            self._save_state()
+
+        return changed
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # NEW: UI OUTPUT METHODS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def get_mood_dict(self) -> dict:
+        """Returns mood + energy as a dict for the native UI (not HTML)."""
+        h = datetime.now().hour
+        energy_data = self._calculate_current_energy()
+
+        table = [
+            (5,  8,  "REVEILLE",     "Rising phase. Cortisol levels normalizing.",  "#00ccff"),
+            (8,  12, "COMBAT READY", "Peak cognitive function detected.",            "#00ff88"),
+            (12, 14, "REFUEL WINDOW","Midday maintenance.",                          "#f2a900"),
+            (14, 18, "PEAK OPS",     "High-intensity operations active.",            "#00ff88"),
+            (18, 22, "WIND DOWN",    "Recovery cycle approaching.",                  "#f2a900"),
+            (22, 5,  "RECOVERY",     "Sleep critical for combat effectiveness.",     "#ff0033"),
+        ]
+        mood_label, mood_desc, mood_color = "NOMINAL", "Systems stable.", "#00ccff"
+        for s, e, l, d, c in table:
+            if (s <= h < e) if s < e else (h >= s or h < e):
+                mood_label, mood_desc, mood_color = l, d, c
+                break
+
+        if energy_data["score"] < 30:
+            mood_color = "#ff4400"
+            mood_label = "FATIGUE WARNING"
+
+        return {
+            "label":       mood_label,
+            "description": mood_desc,
+            "color":       mood_color,
+            "score":       energy_data["score"],
+            "status":      energy_data["status"],
+            "penalties":   energy_data["penalties"],
+        }
+
+    def get_schedule_tasks(self) -> list:
+        """Returns the flat list of today's schedule tasks (sorted by time) for the UI."""
+        from datetime import datetime as _dt, timedelta as _td
+        now = _dt.now()
+        start_win = now - _td(hours=2)
+        end_win   = now + _td(hours=24)
+
+        dates = [(now + _td(days=i)).date().isoformat() for i in [-1, 0, 1]]
+        result = []
+        for d_str in dates:
+            for t in self.schedule_db.get(d_str, []):
+                if "start_time" not in t:
+                    continue
+                h, m = map(int, t["start_time"].split(":"))
+                dt = _dt.fromisoformat(d_str).replace(hour=h, minute=m)
+                if start_win <= dt <= end_win:
+                    t_copy = t.copy()
+                    t_copy["_dt"] = dt.isoformat()
+                    result.append(t_copy)
+
+        result.sort(key=lambda x: x["_dt"])
+        return result
 
 # --- MODULE TEST / USAGE EXAMPLES ---
 if __name__ == "__main__":

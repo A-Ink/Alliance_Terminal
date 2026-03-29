@@ -23,47 +23,84 @@ PROMPTS_PATH = SCRIPT_DIR / "prompts.yaml"
 class AIBackend:
     """Manages the OpenVINO GenAI LLM pipeline with config-driven model loading."""
 
-    # JSON Schema for Extraction-First AI (Aligned with Logic Layer Pydantic models)
+    # JSON Schema — Split Entity Types (v2.2)
     EXTRACTION_SCHEMA = {
         "type": "object",
+        "additionalProperties": False,
+        "required": ["response", "schedule_events", "tasks", "reminders", "facts", "sleep_wake_update"],
         "properties": {
-            "response": { "type": "string", "description": "Conversational reply as Normandy (Formal Butler)." },
-            "entities": {
+            "response": {"type": "string"},
+            "schedule_events": {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ["action", "event_name"],
+                    "additionalProperties": False,
                     "properties": {
-                        "action": { "type": "string", "enum": ["create", "modify", "delete"] },
-                        "intent_type": { "type": "string", "enum": ["fixed_event", "floating_task", "status_update"] },
-                        "event_name": { "type": "string", "description": "Simplified, professional task name." },
-                        "start_time_reference": { "type": "string", "description": "Time string if mentioned (e.g. '09:00', '14:30' or 'now')." },
-                        "end_time_reference": { "type": "string", "description": "Time string if mentioned (e.g. '12:00')." },
-                        "duration_minutes": { "type": "integer", "description": "Total duration in minutes." },
-                        "deadline": { "type": "string", "description": "ISO format deadline if mentioned." },
-                        "priority": { "type": "integer", "description": "Priority score 1-10." }
-                    },
-                    "required": ["intent_type", "event_name"]
+                        "action":               {"type": "string", "enum": ["create","modify","delete"]},
+                        "event_name":           {"type": "string"},
+                        "start_time_reference": {"type": "string"},
+                        "end_time_reference":   {"type": "string"},
+                        "duration_minutes":     {"type": "integer"},
+                        "priority":             {"type": "integer"},
+                        "deadline":             {"type": "string"},
+                        "date_reference":       {"type": "string"}
+                    }
+                }
+            },
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["action", "task_name"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "action":           {"type": "string", "enum": ["create","complete","delete"]},
+                        "task_name":        {"type": "string"},
+                        "duration_minutes": {"type": "integer"},
+                        "priority":         {"type": "integer"},
+                        "deadline":         {"type": "string"},
+                        "auto_schedule":    {"type": "boolean"}
+                    }
+                }
+            },
+            "reminders": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["action", "reminder_text"],
+                    "additionalProperties": False,
+                    "properties": {
+                        "action":        {"type": "string", "enum": ["create","dismiss"]},
+                        "reminder_text": {"type": "string"},
+                        "remind_at":     {"type": "string"},
+                        "date_reference":{"type": "string"}
+                    }
                 }
             },
             "facts": {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ["fact"],
+                    "additionalProperties": False,
                     "properties": {
-                        "fact": { "type": "string", "description": "Extracted user preference or info." },
-                        "category": { "type": "string" }
-                    },
-                    "required": ["fact"]
+                        "fact":     {"type": "string"},
+                        "category": {"type": "string"}
+                    }
+                }
+            },
+            "sleep_wake_update": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "sleep_time":    {"type": "string"},
+                    "wake_time":     {"type": "string"},
+                    "date_reference":{"type": "string"}
                 }
             }
-        },
-        "required": ["response", "entities", "facts"],
-        "additionalProperties": False,
-        "items_required": ["action", "intent_type", "event_name"] # Internal hint for schema enforcement if supported
+        }
     }
-
-    # Updating schema to make action required within entities
-    EXTRACTION_SCHEMA["properties"]["entities"]["items"]["required"] = ["action", "intent_type", "event_name"]
 
     def __init__(self):
         self.config = self._load_config()
@@ -111,7 +148,7 @@ class AIBackend:
     def _load_prompts(self) -> dict:
         if PROMPTS_PATH.exists():
             try:
-                with open(PROMPTS_PATH, "r") as f:
+                with open(PROMPTS_PATH, "r", encoding="utf-8") as f:
                     return yaml.safe_load(f)
             except Exception as e:
                 log.error(f"Failed to load prompts.yaml: {e}")
@@ -275,74 +312,67 @@ class AIBackend:
                             
             except Exception as e:
                 log.error(f"Generation aborted: {e}")
-                return f"[CRITICAL FAILURE] {e}", [], []
+                return f"[CRITICAL FAILURE] {e}", [], [], [], [], None
 
             log.info("Generation complete. Parsing outputs...")
-            response_text, facts, schedule_updates = self._post_process(raw_text)
-            return response_text, facts, schedule_updates
+            res = self._post_process(raw_text)
+            return res
 
     def _post_process(self, raw_text: str):
-        """Standardized JSON parsing with extraction-first schema."""
+        """Parse new split-entity schema. Returns 6-tuple."""
         print("\n" + "="*60)
-        print(" [AI CORE] RAW OUTPUT RECEIVED ".center(60, "="))
+        print(" [AI CORE] RAW OUTPUT ".center(60, "="))
         print(raw_text)
         print("="*60)
 
         try:
-            # Check for obvious truncation (missing ending braces)
-            if not raw_text.strip().endswith("}"):
-                log.warning("Detected potentially truncated AI response. Attempting recovery...")
-                # Basic recovery: try to close the JSON if it looks like it was cut off
-                if raw_text.count("{") > raw_text.count("}"):
-                    # Very crude recovery for single-object or array-of-objects truncation
-                    if raw_text.strip().endswith(",") or raw_text.strip().endswith("[") or raw_text.strip().endswith("{"):
-                        pass # Too broken to auto-fix reliably without a real parser
-                    else:
-                        pass 
-
-            # The engine now GUARANTEES valid JSON matching the schema (unless truncated)
             data = json.loads(raw_text)
-            
-            response_text = data.get("response", "Processing complete.")
-            facts = data.get("facts", [])
-            entities = data.get("entities", [])
-            
-            # Print formatted summary for terminal troubleshooting
+
+            response_text       = data.get("response", "Processing complete.")
+            facts               = data.get("facts", [])
+            schedule_events     = data.get("schedule_events", [])
+            tasks               = data.get("tasks", [])
+            reminders           = data.get("reminders", [])
+            sleep_wake          = data.get("sleep_wake_update", {}) or {}
+
+            # Normalise sleep_wake: discard if both fields are null/empty
+            sw_sleep = sleep_wake.get("sleep_time") or ""
+            sw_wake  = sleep_wake.get("wake_time") or ""
+            sleep_wake = sleep_wake if (sw_sleep or sw_wake) else None
+
+            # Terminal telemetry
             print(f"\n[RESPONSE] >> {response_text}")
-            
             if facts:
-                print("\n[EXTRACTED FACTS]")
+                print("\n[FACTS]")
                 for f in facts:
-                    print(f" • {f.get('fact')} ({f.get('category', 'General')})")
-            
-            if entities:
-                print("\n[SCHEDULE UPDATES]")
-                for e in entities:
-                    print(f" • {e.get('action', 'update').upper()}: {e.get('event_name')} @ {e.get('start_time_reference', 'floating')}")
-            
+                    print(f"  • {f.get('fact')} ({f.get('category','General')})")
+            if schedule_events:
+                print("\n[SCHEDULE EVENTS]")
+                for e in schedule_events:
+                    print(f"  • {e.get('action','?').upper()}: {e.get('event_name')} @ {e.get('start_time_reference','?')}")
+            if tasks:
+                print("\n[TASKS]")
+                for t in tasks:
+                    print(f"  • {t.get('action','?').upper()}: {t.get('task_name')} P{t.get('priority',5)}")
+            if reminders:
+                print("\n[REMINDERS]")
+                for r in reminders:
+                    print(f"  • {r.get('reminder_text')} @ {r.get('remind_at','?')}")
+            if sleep_wake:
+                print(f"\n[SLEEP/WAKE] sleep={sw_sleep or 'n/a'} wake={sw_wake or 'n/a'}")
             print("="*60 + "\n")
 
-            # Map entities to schedule_updates for the UI / Logic Layer
-            schedule_updates = []
-            for ent in entities:
-                ent["type"] = "schedule" # Bridge
-                # Rename/Map fields if logic_engine bridge expects specific keys
-                schedule_updates.append(ent)
-                
-            # Clean up response text for HTML
             clean_text = response_text.replace("\n", "<br>")
-            
-            return clean_text, facts, schedule_updates
-            
+            return clean_text, facts, schedule_events, tasks, reminders, sleep_wake
+
         except Exception as e:
             log.error(f"Post-process failure: {e}")
             print(f"\n[CRITICAL ERROR] Failed to parse AI output: {e}")
             print("="*60 + "\n")
-            # Fallback to legacy extraction if something went horribly wrong
-            return f"[ERROR] Output extraction failed: {e}", [], []
+            return f"[ERROR] Output extraction failed: {e}", [], [], [], [], None
 
     def get_device_info(self) -> dict:
         return {
-            "model": self.model_name,
+            "model":  self.model_name,
             "device": self.device_used,
         }
