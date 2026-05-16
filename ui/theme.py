@@ -67,19 +67,21 @@ def font_orbitron(size: int = 12, weight=QFont.Weight.Normal) -> QFont:
     f = QFont("Orbitron", size)
     f.setWeight(weight)
     f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
-    # Hinting fallbacks for QFont system
+    f.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
     f.setStyleHint(QFont.StyleHint.SansSerif)
     return f
 
 def font_body(size: int = 11) -> QFont:
     """Montserrat — for all body/prose text, chat messages, descriptions."""
     f = QFont("Montserrat", size)
+    f.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
     f.setStyleHint(QFont.StyleHint.SansSerif)
     return f
 
 def font_mono(size: int = 10) -> QFont:
     """Consolidated to Montserrat Regular for data consistency."""
     f = QFont("Montserrat", size)
+    f.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
     f.setStyleHint(QFont.StyleHint.SansSerif)
     return f
 

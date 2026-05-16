@@ -160,8 +160,14 @@ class LeftPanel(QWidget):
         self._spark.push(sys_pct)
 
     def update_device_info(self, info: dict):
-        self._row_model.set_value(info.get("model", "–"))
-        self._row_dev.set_value(info.get("device", "–"))
+        self._row_model.set_value(info.get("model", "\u2013"))
+        device = info.get("device", "\u2013")
+        if "GPU" in device.upper() or "CUDA" in device.upper():
+            self._row_dev.set_value(device, C_GREEN)
+        elif "NPU" in device.upper():
+            self._row_dev.set_value(device, C_CYAN)
+        else:
+            self._row_dev.set_value(device)
 
     # ── Data updates ──
 

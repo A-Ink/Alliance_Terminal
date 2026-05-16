@@ -49,6 +49,14 @@ class LogicEngine:
         self.reminders_db: List[Dict[str, Any]] = []      # NEW: user reminders
         self.overflow_queue: List[Dict[str, Any]] = []
         self.pending_deep_thought_queue: List[Dict[str, Any]] = []  # Deferral queue for dGPU
+        self.user_state: Dict[str, Any] = {                         # Proactive micro-interaction state
+            "sleep_quality": None,
+            "energy_level": None,
+            "mood": None,
+            "goals_today": [],
+            "last_meal": None,
+            "collected_at": None,
+        }
         self.user_energy: int = 100
         self._suppress_anchors = False                    # NEW: avoid re-injection during shifts
         self._last_proactive_time: float = 0.0            # NEW: proactive cooldown tracking
@@ -66,6 +74,7 @@ class LogicEngine:
                         self.tasks_db     = data.get("tasks", [])
                         self.reminders_db = data.get("reminders", [])
                         self.pending_deep_thought_queue = data.get("pending_deep_thought_queue", [])
+                        self.user_state = data.get("user_state", self.user_state)
                     else:
                         self.schedule_db  = data
                         self.user_energy  = 100
@@ -82,6 +91,7 @@ class LogicEngine:
             "tasks":      self.tasks_db,
             "reminders":  self.reminders_db,
             "pending_deep_thought_queue": self.pending_deep_thought_queue,
+            "user_state":  self.user_state,
         }
         with open(self.state_file, 'w') as f:
             json.dump(data, f, indent=2)
@@ -117,6 +127,208 @@ class LogicEngine:
     @property
     def has_deferred_prompts(self) -> bool:
         return len(self.pending_deep_thought_queue) > 0
+
+    # ── User State Updates (Phase 3) ──────────────────────────────────────────
+
+    def update_user_state(self, **kwargs):
+        """Update user_state fields from micro-interaction responses."""
+        for key, value in kwargs.items():
+            if key in self.user_state and value is not None:
+                self.user_state[key] = value
+        self.user_state["collected_at"] = datetime.now().isoformat()
+        self._save_state()
+        log.info(f"[STATE] User state updated: {kwargs}")
+
+    # ── Schedule Sanity Checker (Phase 3) ─────────────────────────────────────
+
+    def validate_schedule_sanity(self, date_str: str) -> List[str]:
+        """
+        Validate today's schedule for biological and temporal coherence.
+        Returns a list of human-readable warning strings (empty = all OK).
+        Only runs on dGPU boot or AC power restore.
+        """
+        day_tasks = self.schedule_db.get(date_str, [])
+        if not day_tasks:
+            return []
+
+        warnings: List[str] = []
+        valid_tasks = [t for t in day_tasks if "start_time" in t]
+        sorted_tasks = sorted(valid_tasks, key=lambda t: self._time_to_minutes(t["start_time"]))
+
+        # Extract key biological anchors
+        wake_ev = next((t for t in sorted_tasks if "wake" in t.get("activity", "").lower()), None)
+        sleep_ev = next((t for t in sorted_tasks if t.get("type") == "sleep"), None)
+        breakfast = next((t for t in sorted_tasks if "breakfast" in t.get("activity", "").lower()), None)
+        lunch = next((t for t in sorted_tasks if "lunch" in t.get("activity", "").lower()), None)
+        dinner = next((t for t in sorted_tasks if "dinner" in t.get("activity", "").lower()), None)
+
+        wake_m = self._time_to_minutes(wake_ev["start_time"]) if wake_ev else None
+        sleep_m = self._time_to_minutes(sleep_ev["start_time"]) if sleep_ev else None
+        breakfast_m = self._time_to_minutes(breakfast["start_time"]) if breakfast else None
+        lunch_m = self._time_to_minutes(lunch["start_time"]) if lunch else None
+        dinner_m = self._time_to_minutes(dinner["start_time"]) if dinner else None
+
+        # 1. Breakfast before wake time
+        if wake_m is not None and breakfast_m is not None:
+            if breakfast_m < wake_m:
+                warnings.append(
+                    f"Breakfast ({breakfast['start_time']}) is scheduled before wake time "
+                    f"({wake_ev['start_time']}). This is physically impossible."
+                )
+
+        # 2. Meal ordering: Breakfast < Lunch < Dinner
+        if breakfast_m is not None and lunch_m is not None and lunch_m <= breakfast_m:
+            warnings.append(
+                f"Lunch ({lunch['start_time']}) is scheduled at or before Breakfast "
+                f"({breakfast['start_time']}). Meals are out of order."
+            )
+        if lunch_m is not None and dinner_m is not None and dinner_m <= lunch_m:
+            warnings.append(
+                f"Dinner ({dinner['start_time']}) is scheduled at or before Lunch "
+                f"({lunch['start_time']}). Meals are out of order."
+            )
+        if breakfast_m is not None and dinner_m is not None and dinner_m <= breakfast_m:
+            warnings.append(
+                f"Dinner ({dinner['start_time']}) is scheduled at or before Breakfast "
+                f"({breakfast['start_time']}). Extreme meal ordering issue."
+            )
+
+        # 3. Activities during sleep window
+        if sleep_m is not None and wake_m is not None:
+            # Normal case: sleep at night, wake in morning (sleep_m > wake_m means cross-midnight)
+            for t in sorted_tasks:
+                if t.get("type") in ("sleep", "biological"):
+                    continue  # Skip sleep/wake anchors themselves
+                t_m = self._time_to_minutes(t["start_time"])
+                # Cross-midnight sleep: e.g. sleep at 23:00, wake at 08:00
+                if sleep_m > wake_m:
+                    # Sleep window: sleep_m..midnight..wake_m
+                    if t_m >= sleep_m or t_m < wake_m:
+                        warnings.append(
+                            f"'{t['activity']}' at {t['start_time']} is scheduled during "
+                            f"the sleep window ({sleep_ev['start_time']}–{wake_ev['start_time']})."
+                        )
+                else:
+                    # Same-day: sleep_m < wake_m (unusual but handle it)
+                    if sleep_m < t_m < wake_m:
+                        warnings.append(
+                            f"'{t['activity']}' at {t['start_time']} is scheduled during "
+                            f"the sleep window ({sleep_ev['start_time']}–{wake_ev['start_time']})."
+                        )
+
+        # 4. Unrealistic wake time (before 4am unless user is a night worker)
+        if wake_m is not None and wake_m < 240 and wake_m > 0:  # 0:01 to 3:59
+            warnings.append(
+                f"Wake time is set to {wake_ev['start_time']} which is unusually early. "
+                f"Please confirm this is correct."
+            )
+
+        # 5. Overlapping events (non-sleep, non-biological)
+        active_tasks = [t for t in sorted_tasks if t.get("type") not in ("sleep", "biological")]
+        for i in range(len(active_tasks) - 1):
+            a = active_tasks[i]
+            b = active_tasks[i + 1]
+            a_start = self._time_to_minutes(a["start_time"])
+            a_end = a_start + a.get("duration", 0)
+            b_start = self._time_to_minutes(b["start_time"])
+            if b_start < a_end:
+                warnings.append(
+                    f"'{a['activity']}' ({a['start_time']}–{a_end // 60:02d}:{a_end % 60:02d}) "
+                    f"overlaps with '{b['activity']}' at {b['start_time']}."
+                )
+
+        # 6. Excessively long events (> 8 hours for non-sleep)
+        for t in sorted_tasks:
+            dur = t.get("duration", 0)
+            if dur > 480 and t.get("type") != "sleep":
+                warnings.append(
+                    f"'{t['activity']}' has a duration of {dur} minutes ({dur // 60}h {dur % 60}m). "
+                    f"This seems unusually long."
+                )
+
+        if warnings:
+            log.info(f"[SANITY] {len(warnings)} anomaly(s) found for {date_str}")
+        return warnings
+
+    # ── GPU Context Payload (Phase 3) ─────────────────────────────────────────
+
+    def get_gpu_context_payload(self) -> str:
+        """
+        Assemble a rich context payload for the dGPU that includes:
+        - User state (sleep quality, energy, mood, goals)
+        - Full schedule with biological annotations
+        - Sanity warnings
+        - Sleep debt
+        """
+        now = datetime.now()
+        today_str = now.date().isoformat()
+        self._init_day(today_str)
+
+        lines = [
+            f"SYSTEM TIME: {now.strftime('%H:%M')}",
+            f"SYSTEM DATE: {today_str}",
+            "",
+            "[GPU CONTEXT — DEEP ANALYSIS PAYLOAD]",
+        ]
+
+        # User state
+        us = self.user_state
+        state_items = []
+        if us.get("sleep_quality"):
+            state_items.append(f"Sleep quality: {us['sleep_quality']}")
+        if us.get("energy_level") is not None:
+            state_items.append(f"Energy level: {us['energy_level']}/10")
+        if us.get("mood"):
+            state_items.append(f"Mood: {us['mood']}")
+        if us.get("goals_today"):
+            state_items.append(f"Goals: {', '.join(us['goals_today'])}")
+        if us.get("last_meal"):
+            state_items.append(f"Last meal: {us['last_meal']}")
+
+        if state_items:
+            lines.append("\n[USER STATE — Collected via micro-interactions]")
+            for item in state_items:
+                lines.append(f"  - {item}")
+        else:
+            lines.append("\n[USER STATE] No user state data collected yet.")
+
+        # Sleep debt
+        debt_mins = self._calculate_sleep_debt(today_str)
+        if debt_mins > 0:
+            lines.append(f"\n[BIOMEDICAL] SLEEP DEBT: {debt_mins}m deficit.")
+
+        # Sanity warnings
+        sanity = self.validate_schedule_sanity(today_str)
+        if sanity:
+            lines.append("\n[SCHEDULE ANOMALIES — Requires Commander Confirmation]")
+            for w in sanity:
+                lines.append(f"  ⚠ {w}")
+
+        # Full schedule
+        lines.append("\n[TODAY'S OPERATIONS SCHEDULE]")
+        day_tasks = self.schedule_db.get(today_str, [])
+        valid_tasks = [t for t in day_tasks if "start_time" in t]
+        for t in sorted(valid_tasks, key=lambda x: x['start_time']):
+            status = " [DONE]" if t.get('completed') else ""
+            ph = " [UNCONFIRMED]" if t.get('is_placeholder') else ""
+            lines.append(
+                f"  - {t['start_time']} ({t.get('duration', '?')}m) "
+                f"[P{t.get('priority', 5)}] [{t.get('type', 'task')}]: "
+                f"{t['activity']}{status}{ph}"
+            )
+
+        # Pending tasks
+        if self.tasks_db:
+            active_tasks = [t for t in self.tasks_db if not t.get("completed")]
+            if active_tasks:
+                lines.append("\n[PENDING TASKS]")
+                for t in active_tasks:
+                    lines.append(
+                        f"  - {t.get('name', '?')} [P{t.get('priority', 5)}] "
+                        f"Deadline: {t.get('deadline', 'none')}"
+                    )
+
+        return "\n".join(lines)
 
     def _calculate_current_energy(self) -> Dict[str, Any]:
         """
@@ -1042,8 +1254,26 @@ class LogicEngine:
         day_tasks = self.schedule_db.get(today_str, [])
         now_m = now.hour * 60 + now.minute
 
-        # 2. Unconfirmed Biological Anchors
-        # Check if default Wake/Meals are still system templates via is_placeholder
+        # 2. Micro-interaction: Sleep quality (after wake detection, if not collected)
+        if self.user_state.get("sleep_quality") is None:
+            wake_ev = next((t for t in day_tasks if "wake" in t.get("activity", "").lower()), None)
+            if wake_ev and not wake_ev.get("is_placeholder"):
+                # Wake was logged — ask about sleep quality
+                wake_m = self._time_to_minutes(wake_ev["start_time"])
+                if now_m > wake_m + 15:  # 15 mins after wake
+                    self._last_proactive_time = now_ts
+                    return "The Commander has woken up but hasn't reported sleep quality. Ask briefly: 'How did you sleep, Commander? Quick rating — good, okay, or rough?'"
+
+        # 3. Micro-interaction: Energy level (2 hours after wake, if not collected)
+        if self.user_state.get("energy_level") is None:
+            wake_ev = next((t for t in day_tasks if "wake" in t.get("activity", "").lower()), None)
+            if wake_ev and not wake_ev.get("is_placeholder"):
+                wake_m = self._time_to_minutes(wake_ev["start_time"])
+                if now_m > wake_m + 120:  # 2 hours after wake
+                    self._last_proactive_time = now_ts
+                    return "Ask the Commander about their current energy level on a scale of 1–10 so you can optimize their schedule placement."
+
+        # 4. Unconfirmed Biological Anchors
         wake_ev = next((t for t in day_tasks if "wake" in t.get("activity", "").lower()), None)
         if wake_ev and wake_ev.get("is_placeholder") and now.hour >= 9:
             self._last_proactive_time = now_ts
@@ -1064,7 +1294,12 @@ class LogicEngine:
             self._last_proactive_time = now_ts
             return "The Commander has not logged their Dinner time. Proactively ask them if they have eaten dinner yet to calculate late-night digestion."
 
-        # 3. Follow-up on recently ended events
+        # 5. Micro-interaction: Goals for today (if empty and morning)
+        if not self.user_state.get("goals_today") and 8 <= now.hour <= 11:
+            self._last_proactive_time = now_ts
+            return "Ask the Commander: 'Any key objectives for today, Commander? I can prioritize your schedule around them.'"
+
+        # 6. Follow-up on recently ended events
         for t in day_tasks:
             if t.get('completed') or "start_time" not in t:
                 continue

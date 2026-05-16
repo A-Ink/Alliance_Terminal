@@ -49,7 +49,7 @@ class TitleBar(QWidget):
         lay.setSpacing(4)
 
         # ── Left panel toggle ──
-        self._btn_left = self._ctrl_btn("◀", "Toggle Intel Panel")
+        self._btn_left = self._ctrl_btn("«", "Toggle Intel Panel")
         self._btn_left.clicked.connect(self.toggle_left)
         lay.addWidget(self._btn_left)
 
@@ -61,9 +61,9 @@ class TitleBar(QWidget):
         lay.addWidget(self._title, 1)
 
         # ── Tactical action buttons ──
-        self._btn_model  = self._action_btn("◈ MODEL",   "Switch AI Core")
-        self._btn_device = self._action_btn("⬡ NPU/iGPU", "Switch Target Silicon")
-        self._btn_help   = self._action_btn("? MANUAL",  "Open Tactical Manual")
+        self._btn_model  = self._action_btn("MODEL",   "Switch AI Core")
+        self._btn_device = self._action_btn("DEVICE",  "Switch Target Silicon")
+        self._btn_help   = self._action_btn("HELP",    "Open Tactical Manual")
         self._btn_model .clicked.connect(self.open_models)
         self._btn_device.clicked.connect(self.open_device)
         self._btn_help  .clicked.connect(self.open_help)
@@ -73,7 +73,7 @@ class TitleBar(QWidget):
         lay.addSpacing(6)
 
         # ── Right panel toggle ──
-        self._btn_right = self._ctrl_btn("▶", "Toggle Operations")
+        self._btn_right = self._ctrl_btn("»", "Toggle Operations")
         self._btn_right.clicked.connect(self.toggle_right)
         lay.addWidget(self._btn_right)
 
@@ -97,19 +97,20 @@ class TitleBar(QWidget):
 
     def _ctrl_btn(self, text: str, tip: str) -> QPushButton:
         btn = QPushButton(text)
-        btn.setFont(font_orbitron(7))
+        btn.setFont(font_body(10))
         btn.setFixedSize(28, 24)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setToolTip(tip)
         btn.setStyleSheet(f"""
-            QPushButton{{background:transparent; color:{C_TEXT_DIM}; border:none; font-family:{S_ORBITRON}; font-size:7px;}}
+            QPushButton{{background:transparent; color:{C_TEXT_DIM}; border:none;
+                         font-family:{S_MONTSERRAT}; font-size:10px; font-weight:bold;}}
             QPushButton:hover{{color:{C_CYAN}; background:rgba(0,229,255,0.10);}}
         """)
         return btn
 
     def _action_btn(self, text: str, tip: str) -> QPushButton:
         btn = QPushButton(text)
-        btn.setFont(font_orbitron(7, QFont.Weight.Bold))
+        btn.setFont(font_orbitron(8, QFont.Weight.Bold))
         btn.setFixedHeight(24)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setToolTip(tip)
@@ -117,8 +118,8 @@ class TitleBar(QWidget):
             QPushButton{{
                 background: transparent; color: {C_TEXT_DIM};
                 border: 1px solid {C_BORDER}; border-radius: 3px;
-                padding: 0 8px;
-                font-family: {S_ORBITRON}; font-size: 7px; letter-spacing: 1px;
+                padding: 0 10px;
+                font-family: {S_ORBITRON}; font-size: 8px; letter-spacing: 1px;
             }}
             QPushButton:hover{{
                 color: {C_CYAN}; border-color: {C_BORDER_LIT};
@@ -143,8 +144,93 @@ class TitleBar(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         p.setPen(QColor(0, 180, 200, 120))
         p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        p.end()
+
+
+class PipelineStatusBar(QWidget):
+    """Thin indicator bar showing current AI pipeline tier (NPU/dGPU/Swapping)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(20)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 12, 0)
+        lay.setSpacing(6)
+
+        self._dot = QLabel()
+        self._dot.setFixedSize(8, 8)
+        self._dot.setStyleSheet(
+            f"background: {C_CYAN}; border-radius: 4px; border: none;"
+        )
+        lay.addWidget(self._dot)
+
+        self._label = QLabel("NPU ACTIVE")
+        self._label.setFont(font_orbitron(7, QFont.Weight.Bold))
+        self._label.setStyleSheet(
+            f"color: {C_CYAN}; letter-spacing: 2px; background: transparent;"
+        )
+        lay.addWidget(self._label)
+
+        lay.addStretch()
+
+        # Pulse animation timer for "swapping" state
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(600)
+        self._pulse_timer.timeout.connect(self._pulse_tick)
+        self._pulse_on = True
+
+    def set_state(self, state: str):
+        """Set pipeline state: 'npu', 'gpu', or 'swapping'."""
+        self._pulse_timer.stop()
+        if state == "npu":
+            self._label.setText("NPU ACTIVE")
+            self._label.setStyleSheet(
+                f"color: {C_CYAN}; letter-spacing: 2px; background: transparent;"
+            )
+            self._dot.setStyleSheet(
+                f"background: {C_CYAN}; border-radius: 4px; border: none;"
+            )
+        elif state == "gpu":
+            self._label.setText("dGPU ACTIVE")
+            self._label.setStyleSheet(
+                f"color: {C_GREEN}; letter-spacing: 2px; background: transparent;"
+            )
+            self._dot.setStyleSheet(
+                f"background: {C_GREEN}; border-radius: 4px; border: none;"
+            )
+        elif state == "swapping":
+            self._label.setText("SWAPPING CORE...")
+            self._label.setStyleSheet(
+                f"color: {C_GOLD}; letter-spacing: 2px; background: transparent;"
+            )
+            self._dot.setStyleSheet(
+                f"background: {C_GOLD}; border-radius: 4px; border: none;"
+            )
+            self._pulse_on = True
+            self._pulse_timer.start()
+
+    def _pulse_tick(self):
+        self._pulse_on = not self._pulse_on
+        opacity = "1.0" if self._pulse_on else "0.3"
+        self._dot.setStyleSheet(
+            f"background: {C_GOLD}; border-radius: 4px; border: none; opacity: {opacity};"
+        )
+        self._label.setStyleSheet(
+            f"color: {C_GOLD}; letter-spacing: 2px; background: transparent;"
+            f" opacity: {opacity};"
+        )
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(4, 15, 30, 200))
+        p.drawRect(self.rect())
         p.end()
 
 
@@ -194,6 +280,13 @@ class AllianceTerminal(QWidget):
         self._titlebar.open_device.connect(self._open_device_toggle)
         self._titlebar.open_help.connect(self._open_help)
         root.addWidget(self._titlebar)
+
+        # ── Pipeline status indicator ──
+        self._pipeline_bar = PipelineStatusBar()
+        root.addWidget(self._pipeline_bar)
+        # Set initial state based on loaded tier
+        if self._orchestrator:
+            self._pipeline_bar.set_state(self._orchestrator.active_tier)
 
         # ── Stacked widget: boot overlay | main content ──
         self._stack = QStackedWidget()
@@ -282,6 +375,9 @@ class AllianceTerminal(QWidget):
         self._start_diagnostics()
         self._start_reminders()
         self._load_panel_data()
+        # Schedule sanity check on boot if dGPU is active
+        if self._orchestrator and self._orchestrator.active_tier == "gpu":
+            QTimer.singleShot(5000, self._run_schedule_sanity_check)
 
     # ── Diagnostics ───────────────────────────────────────────────────────────
 
@@ -506,9 +602,10 @@ class AllianceTerminal(QWidget):
     def _on_swap_started(self, status: str):
         """Called when a model swap begins. Disable input, show status."""
         log.info(f"[UI] Swap started: {status}")
+        self._pipeline_bar.set_state("swapping")
         self._chat_panel.set_input_enabled(False)
         self._chat_panel.on_generation_done({
-            "response": f"<span style='color:#f2a900'>⬡ {status}</span>"
+            "response": f"<span style='color:#f2a900'>⟳ {status}</span>"
         })
 
     def _on_swap_progress(self, status: str):
@@ -518,9 +615,12 @@ class AllianceTerminal(QWidget):
     def _on_swap_complete(self, device_str: str):
         """Called when swap finishes successfully. Re-enable input."""
         log.info(f"[UI] Swap complete: {device_str}")
+        # Update pipeline bar to reflect new tier
+        if self._orchestrator:
+            self._pipeline_bar.set_state(self._orchestrator.active_tier)
         self._chat_panel.set_input_enabled(True)
         self._chat_panel.on_generation_done({
-            "response": f"<span style='color:#00ff88'>⬡ CORE TRANSFER COMPLETE</span><br>"
+            "response": f"<span style='color:#00ff88'>● CORE TRANSFER COMPLETE</span><br>"
                         f"Active: <b>{device_str}</b>"
         })
         # Update device info in left panel
@@ -529,15 +629,41 @@ class AllianceTerminal(QWidget):
             self._left_panel.update_device_info(info)
         except Exception:
             pass
+        # ── Schedule sanity check on dGPU boot ──
+        if self._orchestrator and self._orchestrator.active_tier == "gpu":
+            self._run_schedule_sanity_check()
 
     def _on_swap_failed(self, error: str):
         """Called when swap fails. Re-enable input, show error."""
         log.error(f"[UI] Swap failed: {error}")
+        # Restore pipeline bar to current tier
+        if self._orchestrator:
+            self._pipeline_bar.set_state(self._orchestrator.active_tier)
         self._chat_panel.set_input_enabled(True)
         self._chat_panel.on_generation_done({
-            "response": f"<span style='color:#ff4444'>⬡ CORE TRANSFER FAILED</span><br>"
+            "response": f"<span style='color:#ff4444'>● CORE TRANSFER FAILED</span><br>"
                         f"{error}"
         })
+
+    def _run_schedule_sanity_check(self):
+        """Run schedule sanity validation and trigger AI prompt if anomalies found."""
+        try:
+            from datetime import date
+            warnings = self._logic.validate_schedule_sanity(date.today().isoformat())
+            if warnings:
+                warning_text = " | ".join(warnings[:5])  # Limit to 5 warnings
+                log.info(f"[SANITY] Schedule anomalies detected: {warning_text}")
+                prompt = (
+                    f"[SYSTEM PROACTIVE TASK: The schedule sanity checker found the following "
+                    f"anomalies in today's schedule. Present these to the Commander clearly and "
+                    f"ask them to confirm or fix the data. Anomalies: {warning_text}]"
+                )
+                # Delay slightly to let the GPU fully spool up
+                QTimer.singleShot(3000, lambda: self._trigger_proactive_ai(prompt))
+            else:
+                log.info("[SANITY] Schedule passed sanity check — no anomalies.")
+        except Exception as e:
+            log.warning(f"[SANITY] Sanity check failed: {e}")
 
     # ── Panel signals ─────────────────────────────────────────────────────────
 

@@ -248,8 +248,8 @@
         "is_placeholder": true
       },
       {
-        "start_time": "03:22",
-        "duration": 338,
+        "start_time": "04:18",
+        "duration": 282,
         "activity": "Sleep",
         "priority": 9,
         "type": "sleep",
@@ -260,24 +260,13 @@
     ],
     "2026-05-17": [
       {
-        "start_time": "08:30",
-        "duration": 45,
-        "activity": "Breakfast",
-        "priority": 8,
-        "type": "meal",
-        "deadline": "",
-        "completed": false,
-        "is_placeholder": true
-      },
-      {
-        "start_time": "09:00",
+        "start_time": "00:00",
         "duration": 15,
         "activity": "Wake (Biological Anchor)",
         "priority": 8,
         "type": "biological",
         "deadline": "",
-        "completed": false,
-        "is_placeholder": true
+        "completed": false
       },
       {
         "start_time": "09:30",
@@ -285,6 +274,15 @@
         "activity": "Auto-Recovered Floating Task",
         "priority": 5,
         "type": "task",
+        "deadline": "",
+        "completed": false
+      },
+      {
+        "start_time": "10:30",
+        "duration": 45,
+        "activity": "Breakfast",
+        "priority": 8,
+        "type": "meal",
         "deadline": "",
         "completed": false
       },
@@ -320,7 +318,7 @@
       },
       {
         "start_time": "23:00",
-        "duration": 600,
+        "duration": 60,
         "activity": "Sleep",
         "priority": 9,
         "type": "sleep",
@@ -392,7 +390,7 @@
       }
     ]
   },
-  "user_energy": 92,
+  "user_energy": 89,
   "tasks": [
     {
       "id": "003c052e",
@@ -441,5 +439,13 @@
       "dismissed": false
     }
   ],
-  "pending_deep_thought_queue": []
+  "pending_deep_thought_queue": [],
+  "user_state": {
+    "sleep_quality": null,
+    "energy_level": null,
+    "mood": null,
+    "goals_today": [],
+    "last_meal": null,
+    "collected_at": null
+  }
 }

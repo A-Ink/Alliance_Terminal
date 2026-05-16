@@ -32,8 +32,14 @@ class AiWorker(QThread):
 
             relevant_facts = self._memory.query_relevant(self._text, n=5)
             codex_text     = "\n".join(f"• {f}" for f in relevant_facts)
-            schedule_text  = self._logic.get_context_for_ai()
-            rag_context    = f"{schedule_text}\n\n[DOSSIER FACTS]\n{codex_text}"
+
+            # Use rich GPU payload when dGPU is active, basic context for NPU
+            if getattr(self._ai, 'engine_type', '') == 'llama.cpp':
+                schedule_text = self._logic.get_gpu_context_payload()
+            else:
+                schedule_text = self._logic.get_context_for_ai()
+
+            rag_context = f"{schedule_text}\n\n[DOSSIER FACTS]\n{codex_text}"
 
             def stream_cb(token: str):
                 self.token_streamed.emit(token.replace('\n', '<br>'))
