@@ -421,8 +421,8 @@ class LogicEngine:
                     score += 30
                     penalties.append("Powernap Flush: +30")
 
-        # Clamp limits
-        score = max(15, min(100, score))
+        # Clamp limits and round to 1 decimal
+        score = round(max(15, min(100, score)), 1)
         
         # Status Label Matrix
         if score >= 80: status = "EXCELLENT"
@@ -928,16 +928,16 @@ class LogicEngine:
         
         # 2. Waterfall Parser (AM/PM and 24h)
         formats = [
-            "%H:%M",       # 20:30
-            "%H%M",        # 2030
-            "%I:%M%p",      # 8:30pm
-            "%I:%M %p",     # 8:30 pm
-            "%I.%M%p",      # 8.30pm
-            "%I.%M %p",     # 8.30 pm
-            "%H.%M",        # 20.30
-            "%I%p",         # 8pm
-            "%I %p",        # 8 pm
-            "%H",           # 20
+            ("%H:%M", None),        # 20:30
+            ("%H%M",  4),           # 2030 (only try if exactly 4 chars)
+            ("%I:%M%p", None),      # 8:30pm
+            ("%I:%M %p", None),     # 8:30 pm
+            ("%I.%M%p", None),      # 8.30pm
+            ("%I.%M %p", None),     # 8.30 pm
+            ("%H.%M", None),        # 20.30
+            ("%I%p",  None),        # 8pm
+            ("%I %p", None),        # 8 pm
+            ("%H",    None),        # 20  (bare hour)
         ]
         
         # Clean string for strptime: remove dots/spaces if needed, but waterfall handles most
@@ -945,7 +945,9 @@ class LogicEngine:
         # Some formats need the space back if it was like '8 pm'
         # We'll just try both compressed and original
         for r in [clean_ref, ref.upper()]:
-            for fmt in formats:
+            for fmt, req_len in formats:
+                if req_len is not None and len(r) != req_len:
+                    continue
                 try:
                     dt = datetime.strptime(r, fmt)
                     return dt.strftime("%H:%M")

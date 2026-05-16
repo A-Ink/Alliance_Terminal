@@ -303,7 +303,7 @@ class TabStrip(QWidget):
 
         self._btns = []
         for i, name in enumerate(tabs):
-            btn = QPushButton(f"◈  {name}")
+            btn = QPushButton(f"{name}")
             btn.setFont(font_orbitron(8, QFont.Weight.Bold))
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn.setCheckable(True)
@@ -524,7 +524,7 @@ class ScheduleEntry(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10 if self._is_free else 6, 3, 6, 3)
+        lay.setContentsMargins(6, 3, 6, 3)
         lay.setSpacing(8)
 
         # ── Time label ──
@@ -552,7 +552,7 @@ class ScheduleEntry(QWidget):
         a_lbl = QLabel(act)
         if self._is_free:
             a_lbl.setFont(font_body(10))
-            a_lbl.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent; font-style: italic;")
+            a_lbl.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent;")
         else:
             a_lbl.setFont(font_body(11))
             col = C_GREEN if is_active else (C_TEXT_DIM if task.get("completed") else C_TEXT)

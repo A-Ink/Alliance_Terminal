@@ -1,5 +1,5 @@
 {
-  "active_model": "gemma-4-26b-gpu",
+  "active_model": "gemma-4-e4b-gpu",
   "cache_dir": "model_cache",
   "models": {
     "qwen-2.5-7b": {
@@ -50,13 +50,29 @@
       "top_p": 0.9,
       "top_k": 40
     },
+    "qwen-3.5-9b-gpu": {
+      "display_name": "Qwen 3.5 9B Dense \u2014 Light Core (dGPU)",
+      "hf_model_id": "unsloth/Qwen3.5-9B-MTP-GGUF",
+      "hf_gguf_file": "Qwen3.5-9B-UD-Q8_K_XL.gguf",
+      "engine": "llama.cpp",
+      "target_device": "GPU",
+      "path": "./model/Qwen3.5-9B-UD-Q8_K_XL.gguf",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "context_size": 4096,
+      "top_p": 0.9,
+      "top_k": 40,
+      "n_gpu_layers": -1,
+      "flash_attn": true,
+      "use_mmap": false
+    },
     "gemma-4-26b-gpu": {
       "display_name": "Gemma 4 26B MoE \u2014 Tactical Core (dGPU)",
       "hf_model_id": "unsloth/gemma-4-26B-A4B-it-GGUF",
-      "hf_gguf_file": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+      "hf_gguf_file": "gemma-4-26B-A4B-it-MXFP4_MOE.gguf",
       "engine": "llama.cpp",
       "target_device": "GPU",
-      "path": "./model/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+      "path": "./model/gemma-4-26B-A4B-it-MXFP4_MOE.gguf",
       "temperature": 0.3,
       "max_tokens": 4096,
       "context_size": 4096,
@@ -73,6 +89,22 @@
       "engine": "llama.cpp",
       "target_device": "GPU",
       "path": "./model/Qwen3.6-27B-Q4_K_M.gguf",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "context_size": 4096,
+      "top_p": 0.9,
+      "top_k": 40,
+      "n_gpu_layers": -1,
+      "flash_attn": true,
+      "use_mmap": false
+    },
+    "gemma-4-e4b-gpu": {
+      "display_name": "Gemma 4 E4B \u2014 Speed Core (dGPU)",
+      "hf_model_id": "unsloth/gemma-4-E4B-it-GGUF",
+      "hf_gguf_file": "gemma-4-E4B-it-UD-Q8_K_XL.gguf",
+      "engine": "llama.cpp",
+      "target_device": "GPU",
+      "path": "./model/gemma-4-E4B-it-UD-Q8_K_XL.gguf",
       "temperature": 0.3,
       "max_tokens": 4096,
       "context_size": 4096,

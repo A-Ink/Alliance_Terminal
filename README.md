@@ -1,106 +1,143 @@
-# ◈ ALLIANCE TERMINAL VERSION 3
+# ALLIANCE TERMINAL VERSION 3
 
 > "I am Normandy, your tactical operations butler. My utility is at your disposal, Commander."
 
-**Alliance Terminal Version 3** is a privacy-focused, zero-cloud AI assistant. Optimized for **Intel Core Ultra (NPU)**, it functions as a biologically aware scheduling coach, managing your daily operations with the formal precision of an English Butler.
+**Alliance Terminal Version 3** is a privacy-focused, zero-cloud AI assistant with a **tiered intelligence architecture**. It dynamically switches between an **NPU** (low-power triage) and a **dGPU** (deep reasoning) based on your laptop's power state. Built as a biologically aware scheduling coach, it manages your daily operations with the formal precision of an English Butler.
 
 ---
 
-## ⚡ Deployment Protocol (Quick Start)
+## Deployment Protocol (Quick Start)
 
 ### 1. Requirements
-*   **Operating System**: Windows 11 (Windows 10 may require manual pathing).
-*   **Hardware**: 16GB+ RAM. Recommended: **Intel Core Ultra** (for NPU) or **Intel Arc** (for iGPU/Vulkan).
-*   **Python**: v3.11 or v3.12 (Managed via setup script).
+*   **Operating System**: Windows 11.
+*   **Hardware**: 16GB+ RAM. Recommended: **Intel Core Ultra** (for NPU) + **NVIDIA RTX dGPU** (for deep reasoning).
+*   **Python**: v3.12.
+*   **CUDA Toolkit**: v12.6 (for dGPU support — **do not use CUDA 13.x**, it has compatibility issues).
 
-### 2. Implementation Steps
+### 2. Installation
+
 Open a PowerShell terminal in the project root:
 
-1.  **Initialize Environment**: Run the automated setup to create the virtual environment and install optimized dependencies (OpenVINO, PyQt6, ChromaDB).
+1.  **Initialize Environment**: Creates venv, installs dependencies, and optionally sets up CUDA/llama-cpp-python.
     ```powershell
     ./setup.ps1
     ```
-2.  **Requisition AI Cores**: Download the base models. This handles hardware-specific graph compilation for your NPU.
+    The setup script will:
+    - Create a Python 3.12 virtual environment
+    - Install core dependencies (OpenVINO, PyQt6, ChromaDB)
+    - Detect CUDA/Vulkan and offer GPU backend installation
+    - Option `[P]` installs a pre-built llama-cpp-python wheel (no compilation needed)
+
+2.  **Download AI Models**: Download the NPU and dGPU model files.
     ```powershell
     python download_model.py
     ```
-3.  **Launch Interface**: Activate the terminal.
+
+3.  **Launch Terminal**:
     ```powershell
     python main.py
     ```
 
 ---
 
-## 🧠 Core Features
+## Architecture
 
-### 1. Local-Silicon Intelligence (Privacy First)
-Unlike cloud-based assistants (Siri, Alexa), the Terminal runs **100% locally**. No recordings or schedule data ever leave your machine.
-*   **Hardware Acceleration**: Uses the Intel NPU for low-latency, battery-efficient inference.
-*   **Structured Intent**: The AI extracts complex schedules, tasks, and reminders directly from your natural language input.
+### Tiered Intelligence System
 
-### 2. Biological Cognitive Engine
-The Terminal is "Biologically Aware"—it understands that you aren't a machine. It calculates your **Operative Status (Energy Score)** in real-time based on:
-*   **Sleep Debt**: Penalties for falling below your baseline.
-*   **Food Comas**: Automatic "Post-Prandial Lethargy" windows following meals.
-*   **Cognitive Load**: High-intensity tasks drain energy faster than simple chores.
+| Tier | Hardware | Model | When Active | Purpose |
+|------|----------|-------|-------------|---------|
+| **NPU** | Intel Core Ultra NPU | Qwen 2.5 7B (OpenVINO) | On battery | Fast triage, JSON extraction, simple tasks |
+| **dGPU** | NVIDIA RTX (CUDA) | Gemma 4 27B / Qwen 3 27B (GGUF) | On AC power | Deep reasoning, schedule analysis, complex queries |
 
-### 3. Permanent Dossier Memory
-Powered by **ChromaDB**, the Terminal maintains a "Commander Dossier." It remembers your preferences, biographical details, and past conversations, injecting them into its local memory for perfect long-term recall.
+The **Pipeline Orchestrator** handles seamless hot-swapping between tiers when power state changes. A status bar at the top shows the active tier in real-time.
 
-### 4. Mathematical Operations Timeline
-A live, 36-hour window into your life.
-*   **12h Past / 24h Future**: See exactly where your time went and where it’s going.
-*   **Free Time Gaps**: Automatically identifies and displays gaps in your schedule.
-*   **Tactical Glow**: Current active events glow emerald green with a pulsing indicator.
+### Phase 1: Core Intelligence
+- OpenVINO NPU backend with hardware-specific model caching
+- llama.cpp dGPU backend with CUDA acceleration
+- Structured JSON intent extraction from natural language
+- Streaming token output with live UI updates
 
----
+### Phase 2: Fast-Paths & Deferral
+- **Python Fast-Path**: Regex parser catches common commands ("remind me to X at Y") and bypasses the AI entirely for near-zero latency
+- **Deep Thought Deferral**: When the NPU is unsure (< 90% confidence), it flags `requires_deep_thought: true`. The prompt is queued and processed when the dGPU comes online
+- **Persistent Queue**: Deferred prompts survive app restarts via `schedule.json`
 
-## 🕹 Tactical Interface Overview
-
-The Version 3 interface features a revamped Title Bar with three primary tactical controls:
-
-*   **◈ MODEL**: Switch between different AI cores (Qwen, Phi, Mistral) on the fly.
-*   **⬡ NPU/iGPU**: Toggle which piece of hardware handles the AI processing (NPU for efficiency, iGPU for power).
-*   **? MANUAL**: Access the full tactical manual, including the mathematics behind the scheduling engine.
-
-> [!TIP]
-> **Inward Compression**: Toggle the side panels using the ◀ and ▶ buttons. The panels now collapse *inward*, ensuring your central command console (Chat Panel) remains a constant, stable size.
+### Phase 3: UI Transparency & Proactive Gathering
+- **Pipeline Status Bar**: Live indicator showing NPU Active / dGPU Active / Swapping
+- **Schedule Sanity Checker**: On dGPU boot, validates meal ordering, sleep/wake coherence, and event overlaps — prompts the user to fix anomalies
+- **User State Micro-Interactions**: Proactively asks about sleep quality, energy levels, and daily goals to build context
+- **GPU Context Payload**: Rich biological + schedule context injected into dGPU prompts for personalized recommendations
 
 ---
 
-## 📁 Architectural Specifications (For Developers)
+## Core Features
 
-### ◈ The Backend Core
-*   [main.py](main.py): Entry point. Orchestrates the **Main Thread Hardware Initialization** (critical for NPU DLL stability).
-*   [ai_backend.py](ai_backend.py): The OpenVINO bridge. Manages streaming, hardware-specific blob caching, and JSON intent extraction.
-*   [logic_engine.py](logic_engine.py): The "Logic Layer." Implements ripple rescheduling, priority gravity, and biological anchor enforcement.
-*   [memory_manager.py](memory_manager.py): Manages the local vector storage (ChromaDB) for user-fact persistence.
+### Local-Silicon Intelligence (Privacy First)
+Unlike cloud-based assistants, the Terminal runs **100% locally**. No recordings or schedule data ever leave your machine.
 
-### ◈ The UI Subsystem
-*   [ui/window.py](ui/window.py): Frameless, resizable window with custom hit-testing and inward panel logic.
-*   [ui/panels.py](ui/panels.py): Defines the three-column layout (Left: Dossier/Tasks; Center: Comms; Right: Status/Ops).
-*   [ui/dialogs.py](ui/dialogs.py): **[NEW]** Tactical popup system for model management and technical documentation.
-*   [ui/widgets.py](ui/widgets.py): Custom-painted components (Energy Bar, pulsing Schedule Rows) using high-performance QPainter overrides.
-*   [ui/theme.py](ui/theme.py): Centralized design system using a strict **Orbitron + Montserrat** typography stack with cross-platform fallbacks.
+### Biological Cognitive Engine
+Calculates your **Operative Status (Energy Score)** in real-time based on:
+*   **Circadian Decay**: Linear energy decline from wake to sleep
+*   **Sleep Debt**: Penalties for falling below your baseline
+*   **Food Comas**: Post-prandial lethargy windows following meals
+*   **Cognitive Load**: High-intensity tasks drain energy faster
+
+### Permanent Dossier Memory
+Powered by **ChromaDB**, the Terminal maintains a "Commander Dossier" — your preferences, biographical details, and past facts. These are injected into AI context for personalized long-term recall.
+
+### Mathematical Operations Timeline
+A live, 36-hour window into your schedule:
+*   **12h Past / 24h Future**: See where your time went and where it's going
+*   **Free Time Gaps**: Automatically identifies and displays gaps between events
+*   **Active Event Glow**: Current active events pulse emerald green
+
+### Schedule Sanity Checking
+On dGPU boot, the system validates:
+*   Breakfast is after wake time
+*   Meal ordering is correct (Breakfast < Lunch < Dinner)
+*   No activities during sleep windows
+*   No overlapping events
+*   No excessively long events (> 8 hours for non-sleep)
 
 ---
 
-## 🛠 Operation Logic
+## Tactical Interface
 
-### Temporal Shifting
-The Terminal supports complex time-math natively. You can tell the AI:
-*   *"Shift my 2pm meeting by +1h"*
-*   *"I'll do the grocery run after lunch"*
-*   *"Schedule a study block for 90 minutes after my nap"*
+The title bar contains three action buttons:
 
-The `LogicEngine` calculates the final timestamps before updating the database, preventing common AI "hallucinations" regarding clock arithmetic.
+*   **MODEL**: Switch between different AI cores on the fly
+*   **DEVICE**: Toggle which hardware handles AI processing
+*   **HELP**: Access the tactical manual with scheduling engine documentation
 
-### Biological Anchors
-The schedule is built around **Anchors** (Sleep, Wake, Meals, Exercise). These are high-priority blocks that the `LogicEngine` will attempt to preserve. If a shift causes you to miss a meal or stay awake too late, the **Operative Status** will drop into the red, and Normandy will issue a formal warning.
+Side panels collapse inward using the `«` and `»` buttons.
 
 ---
 
-## ◈ Credits & Inspiration
+## File Architecture
+
+### Backend Core
+*   [main.py](main.py) — Entry point. Main-thread hardware init, power monitoring, orchestrator setup.
+*   [ai_backend.py](ai_backend.py) — OpenVINO + llama.cpp dual backend. Streaming, JSON extraction, model management.
+*   [logic_engine.py](logic_engine.py) — Scheduling engine: ripple rescheduling, priority gravity, biological anchors, sanity checking.
+*   [memory_manager.py](memory_manager.py) — ChromaDB vector storage for user-fact persistence.
+*   [power_manager.py](power_manager.py) — Power state monitoring + Pipeline Orchestrator for tier swapping.
+*   [fast_path.py](fast_path.py) — Regex-based command interceptor for zero-latency common operations.
+
+### UI Subsystem
+*   [ui/window.py](ui/window.py) — Frameless resizable window, pipeline status bar, swap callbacks.
+*   [ui/panels.py](ui/panels.py) — Three-column layout (Left: Dossier/Tasks; Center: Chat; Right: Status/Ops).
+*   [ui/dialogs.py](ui/dialogs.py) — Popup system for model management and documentation.
+*   [ui/widgets.py](ui/widgets.py) — Custom-painted components (Energy Bar, Schedule Rows, Tab Strips).
+*   [ui/theme.py](ui/theme.py) — Design system: Orbitron + Montserrat typography with font hinting.
+
+### Configuration
+*   [config.json](config.json) — Model paths, GPU model key, hardware settings.
+*   [prompts.yaml](prompts.yaml) — Tiered prompt system (NPU vs GPU), model-specific hints.
+*   [schedule.json](schedule.json) — Persistent state: schedules, tasks, reminders, user state, deferral queue.
+
+---
+
+## Credits & Inspiration
 *   **Aesthetics**: Inspired by the *Mass Effect* Alliance Terminal interface.
-*   **AI Core**: Optimized OpenVINO AI models.
+*   **AI Cores**: OpenVINO (NPU) + llama.cpp (dGPU).
 *   **Developer**: Ashok Iynkaran and lots of AI coding agents.

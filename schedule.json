@@ -248,8 +248,8 @@
         "is_placeholder": true
       },
       {
-        "start_time": "04:18",
-        "duration": 282,
+        "start_time": "04:58",
+        "duration": 302,
         "activity": "Sleep",
         "priority": 9,
         "type": "sleep",
@@ -260,20 +260,11 @@
     ],
     "2026-05-17": [
       {
-        "start_time": "00:00",
+        "start_time": "10:00",
         "duration": 15,
         "activity": "Wake (Biological Anchor)",
         "priority": 8,
         "type": "biological",
-        "deadline": "",
-        "completed": false
-      },
-      {
-        "start_time": "09:30",
-        "duration": 60,
-        "activity": "Auto-Recovered Floating Task",
-        "priority": 5,
-        "type": "task",
         "deadline": "",
         "completed": false
       },
@@ -318,7 +309,7 @@
       },
       {
         "start_time": "23:00",
-        "duration": 60,
+        "duration": 420,
         "activity": "Sleep",
         "priority": 9,
         "type": "sleep",
@@ -390,7 +381,7 @@
       }
     ]
   },
-  "user_energy": 89,
+  "user_energy": 91,
   "tasks": [
     {
       "id": "003c052e",

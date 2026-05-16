@@ -31,7 +31,7 @@ def _scroll_area(widget: QWidget) -> QScrollArea:
     widget.setStyleSheet("background: transparent;")
     return sa
 
-def _empty_state(text: str, icon: str = "◈") -> QLabel:
+def _empty_state(text: str, icon: str = "—") -> QLabel:
     lbl = QLabel(f"{icon}  {text}")
     lbl.setFont(font_body(11))
     lbl.setStyleSheet(f"color: {C_TEXT_DIM}; padding: 24px 12px;")
@@ -185,7 +185,7 @@ class LeftPanel(QWidget):
                 item.widget().deleteLater()
 
         if not tasks:
-            self._tasks_lay.addWidget(_empty_state("No active missions", "◈"))
+            self._tasks_lay.addWidget(_empty_state("No active missions"))
             return
 
         for t in tasks:
@@ -573,7 +573,9 @@ class RightPanel(QWidget):
         self._ebar.set_value(score)
 
         e_col = C_GREEN if score > 60 else C_GOLD if score > 30 else C_RED
-        self._energy_val.setText(f"{score}%")
+        # Display as integer if whole, 1dp otherwise
+        score_str = f"{int(score)}" if score == int(score) else f"{score:.1f}"
+        self._energy_val.setText(f"{score_str}%")
         self._energy_val.setStyleSheet(f"color: {e_col}; background: transparent;")
 
     def update_schedule(self, tasks: list):
@@ -586,7 +588,7 @@ class RightPanel(QWidget):
                 item.widget().deleteLater()
 
         if not tasks:
-            self._sched_lay.addWidget(_empty_state("Schedule clear", "◈"))
+            self._sched_lay.addWidget(_empty_state("Schedule clear"))
             return
 
         for t in tasks:

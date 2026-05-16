@@ -41,11 +41,11 @@ class TitleBar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(36)
+        self.setFixedHeight(40)
         self._drag_pos: QPoint | None = None
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 0, 8, 0)
+        lay.setContentsMargins(8, 2, 8, 2)
         lay.setSpacing(4)
 
         # ── Left panel toggle ──
@@ -54,8 +54,8 @@ class TitleBar(QWidget):
         lay.addWidget(self._btn_left)
 
         # ── Title ──
-        self._title = QLabel("◈  ALLIANCE TERMINAL V3  ◈")
-        self._title.setFont(font_orbitron(9, QFont.Weight.Bold))
+        self._title = QLabel("ALLIANCE TERMINAL V3")
+        self._title.setFont(font_orbitron(10, QFont.Weight.Bold))
         self._title.setStyleSheet(f"color:{C_CYAN}; letter-spacing:5px; background:transparent;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._title, 1)
@@ -80,17 +80,22 @@ class TitleBar(QWidget):
         lay.addSpacing(4)
 
         # ── Window controls ──
-        for label, signal in [("─", self.minimize_clicked), ("✕", self.close_clicked)]:
+        for label, signal, hover_bg in [
+            ("─", self.minimize_clicked, "rgba(0,229,255,0.15)"),
+            ("X", self.close_clicked, "rgba(255,50,50,0.35)"),
+        ]:
             btn = QPushButton(label)
-            btn.setFixedSize(28, 24)
+            btn.setFixedSize(32, 26)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            close_style = f"QPushButton:hover{{background:rgba(255,50,50,0.35); color:white;}}" \
-                          if label == "✕" else \
-                          f"QPushButton:hover{{background:rgba(0,229,255,0.15);}}"
             btn.setStyleSheet(f"""
-                QPushButton{{background:transparent; color:{C_TEXT}; border:none;
-                             font-family:{S_MONTSERRAT}; font-size:13px;}}
-                {close_style}
+                QPushButton{{
+                    background:transparent; color:{C_TEXT}; border:none;
+                    font-family: 'Segoe UI Symbol', {S_MONTSERRAT};
+                    font-size:12px; font-weight:bold;
+                }}
+                QPushButton:hover{{
+                    background:{hover_bg}; color:white;
+                }}
             """)
             btn.clicked.connect(signal)
             lay.addWidget(btn)
