@@ -114,16 +114,18 @@ class ReminderWorker(QThread):
     """Checks for proactive reminders periodically."""
 
     reminder_ready = pyqtSignal(str)
+    proactive_trigger = pyqtSignal(str)  # NEW: For autonomous AI behavior
 
-    def __init__(self, logic, interval_sec: int = 900, parent=None):
+    def __init__(self, logic, memory, interval_sec: int = 900, parent=None):
         super().__init__(parent)
         self._logic    = logic
+        self._memory   = memory
         self._interval = interval_sec
         self._running  = True
 
     def run(self):
-        # Wait 2 minutes before first proactive check
-        for _ in range(120 * 10):
+        # Wait 15 seconds before first proactive check (allows NPU to spool up)
+        for _ in range(15 * 10):
             if not self._running:
                 return
             time.sleep(0.1)
@@ -132,8 +134,19 @@ class ReminderWorker(QThread):
             try:
                 for html in self._logic.check_reminders():
                     self.reminder_ready.emit(html)
+                
+                # Proactive AI Triggers (Empty Dossier, Event Followups)
+                count = 0
+                try:
+                    count = self._memory.collection.count() if self._memory.collection else 0
+                except Exception:
+                    pass
+                prompt = self._logic.check_proactive_triggers(count)
+                if prompt:
+                    self.proactive_trigger.emit(prompt)
+                    
             except Exception as e:
-                log.warning(f"Reminder check error: {e}")
+                log.warning(f"Reminder/Proactive check error: {e}")
             for _ in range(self._interval * 10):
                 if not self._running:
                     return

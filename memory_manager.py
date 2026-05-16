@@ -84,6 +84,14 @@ class MemoryManager:
         fact_id = f"fact_{uuid.uuid4().hex[:12]}"
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
 
+        self.collection.add(
+            ids=[fact_id],
+            documents=[fact],
+            metadatas=[{"category": category, "timestamp": timestamp}]
+        )
+        log.info(f"Saved fact '{fact_id}': {fact}")
+        return fact_id
+
     def delete_fact(self, search_text: str) -> bool:
         """Search for a fact containing the text and permanently delete it."""
         try:

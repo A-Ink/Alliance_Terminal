@@ -46,6 +46,7 @@ def _empty_state(text: str, icon: str = "◈") -> QLabel:
 
 class LeftPanel(QWidget):
     task_complete    = pyqtSignal(str)
+    task_uncomplete  = pyqtSignal(str)
     task_delete      = pyqtSignal(str)
     reminder_dismiss = pyqtSignal(str)
 
@@ -184,6 +185,7 @@ class LeftPanel(QWidget):
         for t in tasks:
             item = TaskItem(t)
             item.completed_signal.connect(self.task_complete)
+            item.uncompleted_signal.connect(self.task_uncomplete)
             item.deleted_signal.connect(self.task_delete)
             self._tasks_lay.addWidget(item)
 
@@ -299,7 +301,16 @@ class ChatPanel(QWidget):
                 border: 1px solid {C_BORDER_LIT};
             }}
         """)
-        self._input.installEventFilter(self)
+        # Custom hit interceptor for Enter to submit
+        def _input_keypress(event):
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                # Only send if input isn't blank and engine isn't busy
+                if self._input.toPlainText().strip() and self._send_btn.isEnabled():
+                    self._send()
+                return
+            QTextEdit.keyPressEvent(self._input, event)
+
+        self._input.keyPressEvent = _input_keypress
         ip_lay.addWidget(self._input)
 
         btn_row = QHBoxLayout()
@@ -395,6 +406,20 @@ class ChatPanel(QWidget):
 
         # Streaming bubble (starts empty)
         self._current_bubble = ChatBubble(self.NORMANDY, "", "normandy")
+        self._chat_inner_lay.addWidget(self._current_bubble)
+        self._current_bubble.play_entry()
+
+    def start_proactive_generation(self):
+        """Hidden execution path for AI triggers without user input."""
+        self._busy = True
+        self._send_btn.setEnabled(False)
+
+        self._thinking = ThinkingDots()
+        self._chat_inner_lay.addWidget(self._thinking)
+        QTimer.singleShot(100, self._scroll_bottom)
+
+        # Proactive Streaming bubble (starts empty, green styling)
+        self._current_bubble = ChatBubble(f"{self.NORMANDY} [PROACTIVE]", "", "commander")
         self._chat_inner_lay.addWidget(self._current_bubble)
         self._current_bubble.play_entry()
 

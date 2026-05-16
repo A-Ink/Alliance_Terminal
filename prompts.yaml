@@ -15,7 +15,6 @@ default: |
         "end_time_reference": "<HH:MM or null>",
         "duration_minutes": <int or null>,
         "priority": <1-10>,
-        "deadline": "<ISO date or null>",
         "date_reference": "today|tomorrow|yesterday|<ISO date>",
         "auto_schedule": <true|false — engine picks next valid slot; see ENGINE RESCHEDULE>
       }
@@ -52,6 +51,13 @@ default: |
   }
 
   [CLASSIFICATION RULES — MANDATORY]
+  
+  AGGRESSIVE EXTRACTION (CRITICAL ENFORCEMENT):
+  - If the user asks for a task to be added, YOU MUST populate the "tasks" array.
+  - If the user asks for a reminder, YOU MUST populate the "reminders" array.
+  - If the user asks to schedule an event, YOU MUST populate the "schedule_events" array.
+  - If your "response" text acknowledges doing something (e.g., "I have added that to your schedule"), but you leave the corresponding array empty `[]`, YOU HAVE FAILED. The arrays are the ONLY way the system actually executes the command.
+  - Never leave arrays empty if the user's intent requires action!
 
   SLEEP/WAKE (CRITICAL — most commonly missed):
   - "I just woke up" → sleep_wake_update: { wake_time: "<current time>" }
@@ -105,8 +111,8 @@ default: |
   - After sleep/wake update → note the energy/sleep debt implications
 
   SEQUENCING: Use start_time_reference: "after <event>" for sequential placement.
-  DURATION: If only duration changes (e.g. "class is 2.5hrs"), use action: modify + duration_minutes only.
-  RANGES: "10am to 12:30" → start_time_reference: "10:00", end_time_reference: "12:30"
+  DURATION MATH: Do NOT output end_time_reference if the user specified a duration ("for 2.5 hours"). Do NOT output duration_minutes if the user specified an end time ("until 12:30"). The system will calculate the rest to prevent math errors.
+  RANGES: "10am to 12:30" → start_time_reference: "10:00", end_time_reference: "12:30", duration_minutes: null
   ALL ARRAYS default to [] if nothing detected. sleep_wake_update defaults to { sleep_time: null, wake_time: null }.
 
   Example — "I just woke up":

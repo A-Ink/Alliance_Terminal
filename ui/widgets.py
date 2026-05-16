@@ -364,6 +364,7 @@ class TabStrip(QWidget):
 
 class TaskItem(QWidget):
     completed_signal = pyqtSignal(str)
+    uncompleted_signal = pyqtSignal(str)
     deleted_signal   = pyqtSignal(str)
 
     def __init__(self, task: dict, parent=None):
@@ -451,6 +452,8 @@ class TaskItem(QWidget):
         self._name.setStyleSheet(f"color: {col}; background: transparent;")
         if self._done:
             self.completed_signal.emit(self._id)
+        else:
+            self.uncompleted_signal.emit(self._id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

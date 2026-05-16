@@ -361,15 +361,13 @@ class AIBackend:
                 cb = ""
                 dossier = ""
             elif len(sys_text) > 5000:
-                sys_text = (
-                    sys_text[: max(3500, len(sys_text) * 2 // 3)]
-                    + "\n[... system instructions truncated ...]"
-                )
+                target = max(3500, len(sys_text) * 2 // 3)
+                half = target // 2
+                sys_text = sys_text[:half] + "\n[... system instructions truncated ...]\n" + sys_text[-half:]
             elif len(sys_text) > 2200:
-                sys_text = (
-                    sys_text[: max(1800, len(sys_text) * 2 // 3)]
-                    + "\n[... system instructions truncated ...]"
-                )
+                target = max(1500, len(sys_text) * 2 // 3)
+                half = target // 2
+                sys_text = sys_text[:half] + "\n[... system instructions truncated ...]\n" + sys_text[-half:]
             else:
                 max_new = max(32, max_new // 2)
             cb = context_block_from(dossier)
@@ -382,16 +380,25 @@ class AIBackend:
         # Final hard cap on characters so tokenizer cannot exceed NPU MAX_PROMPT_LEN
         max_chars_budget = max(400, prompt_cap * 3 - 64)
         if len(full) > max_chars_budget:
-            full = full[:max_chars_budget] + "\n[... truncated to NPU prompt limit ...]"
-            pt = self._estimate_prompt_tokens(full)
-            max_new = max(32, min(max_gen_effective, total_ctx - pt - safety))
+            # Safely slice from the middle of system text to preserve user_message at the end
+            allowed_sys = max(100, max_chars_budget - len(user_message) - len(cb) - 80)
+            if len(sys_text) > allowed_sys:
+                half = allowed_sys // 2
+                sys_text = sys_text[:half] + "\n[... truncated ...]\n" + sys_text[-half:]
+                full = make_full(sys_text, cb)
+                pt = self._estimate_prompt_tokens(full)
+                max_new = max(32, min(max_gen_effective, total_ctx - pt - safety))
 
         if pt + max_new > total_ctx:
             max_chars = max(400, (total_ctx - max_new - safety) * 3)
             if len(full) > max_chars:
-                full = full[:max_chars] + "\n[... truncated ...]"
-                pt = self._estimate_prompt_tokens(full)
-                max_new = max(32, min(max_gen_effective, total_ctx - pt - safety))
+                allowed_sys = max(100, max_chars - len(user_message) - len(cb) - 80)
+                if len(sys_text) > allowed_sys:
+                    half = allowed_sys // 2
+                    sys_text = sys_text[:half] + "\n[... truncated ...]\n" + sys_text[-half:]
+                    full = make_full(sys_text, cb)
+                    pt = self._estimate_prompt_tokens(full)
+                    max_new = max(32, min(max_gen_effective, total_ctx - pt - safety))
 
         log.info(
             f"OpenVINO context budget: est_prompt_tokens≈{pt}, max_new_tokens={max_new}, "
@@ -520,6 +527,29 @@ class AIBackend:
         print(raw_text)
         print("="*60)
 
+        # ====== JSON REPAIR HEURISTICS ======
+        raw_text = raw_text.strip()
+        
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:]
+        elif raw_text.startswith("```"):
+            raw_text = raw_text[3:]
+            
+        if raw_text.endswith("```"):
+            raw_text = raw_text[:-3]
+            
+        raw_text = raw_text.strip()
+        
+        # Attempt to auto-wrap missing root-level curly braces
+        if raw_text.startswith('"response"'):
+            raw_text = "{" + raw_text
+            
+        # Try to aggressively slice context garbage
+        start_idx = raw_text.find('{')
+        end_idx = raw_text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+            raw_text = raw_text[start_idx:end_idx+1]
+            
         try:
             data = json.loads(raw_text)
 
@@ -533,6 +563,23 @@ class AIBackend:
             # Normalise sleep_wake: discard if both fields are null/empty
             sw_sleep = sleep_wake.get("sleep_time") or ""
             sw_wake  = sleep_wake.get("wake_time") or ""
+            
+            # AI Hallucination Guard: Sometimes models output '00:00' instead of null
+            # Only permit '00:00' if they contextually acknowledged a sleep/wake time AND mentioned the time
+            resp_lower = response_text.lower()
+            
+            has_time = any(k in resp_lower for k in ["00:", "12:00", "12a", "zero", "midnight"])
+            
+            if sw_sleep in ["00:00", "0:00", "midnight"]:
+                has_sleep = any(k in resp_lower for k in ["sleep", "bed", "night"])
+                if not (has_time and has_sleep):
+                    sw_sleep = ""
+                    
+            if sw_wake in ["00:00", "0:00", "midnight"]:
+                has_wake = any(k in resp_lower for k in ["wake", "up", "morning"])
+                if not (has_time and has_wake):
+                    sw_wake = ""
+            
             sleep_wake = sleep_wake if (sw_sleep or sw_wake) else None
 
             # Terminal telemetry
@@ -555,6 +602,53 @@ class AIBackend:
                     print(f"  • {r.get('reminder_text')} @ {r.get('remind_at','?')}")
             if sleep_wake:
                 print(f"\n[SLEEP/WAKE] sleep={sw_sleep or 'n/a'} wake={sw_wake or 'n/a'}")
+            
+            # --- HEURISTIC FALLBACK ENGINE ---
+            # Quantized NPU models sometimes fail to populate arrays but acknowledge the task in 'response'.
+            response_lower = response_text.lower()
+            
+            # 1. Catch missing Reminders
+            if not reminders and "remind" in response_lower:
+                time_match = re.search(r'at (\d{1,2}(?::\d{2})?(?:[ap]m)?)', response_lower)
+                # Ensure we don't accidentally catch "remind me to..." without a time as a reminder
+                # (if no time, it's usually a task)
+                if time_match:
+                    rem_time = time_match.group(1)
+                    log.warning(f"HEURISTIC: Rebuilding missing reminder at {rem_time} from response string.")
+                    reminders.append({
+                        "action": "create",
+                        "reminder_text": "System Auto-Recovered Reminder",
+                        "remind_at": rem_time,
+                        "date_reference": "today"
+                    })
+                    response_text += "<br><span style='color:#00e5ff'>[NPU Fallback: Reminder recovered]</span>"
+
+            # 2. Catch missing Tasks / Schedules
+            if not tasks and not schedule_events and any(x in response_lower for x in ["schedule", "add", "queue", "task"]):
+                time_match = re.search(r'at (\d{1,2}(?::\d{2})?(?:[ap]m)?)', response_lower)
+                if time_match:
+                    sked_time = time_match.group(1)
+                    log.warning(f"HEURISTIC: Rebuilding missing schedule event at {sked_time}.")
+                    schedule_events.append({
+                        "action": "create",
+                        "event_name": "Auto-Recovered Task",
+                        "start_time_reference": sked_time,
+                        "duration_minutes": 60,
+                        "priority": 5,
+                        "auto_schedule": False
+                    })
+                    response_text += "<br><span style='color:#00e5ff'>[NPU Fallback: Schedule recovered]</span>"
+                elif "add" in response_lower or "queue" in response_lower or "task" in response_lower:
+                    log.warning("HEURISTIC: Rebuilding missing floating task.")
+                    tasks.append({
+                        "action": "create",
+                        "task_name": "Auto-Recovered Floating Task",
+                        "duration_minutes": 60,
+                        "priority": 5,
+                        "auto_schedule": True
+                    })
+                    response_text += "<br><span style='color:#00e5ff'>[NPU Fallback: Task recovered]</span>"
+                    
             print("="*60 + "\n")
 
             clean_text = response_text.replace("\n", "<br>")

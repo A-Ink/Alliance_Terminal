@@ -227,6 +227,7 @@ class AllianceTerminal(QWidget):
 
         # ── Wire panel signals ──
         self._left_panel.task_complete.connect(self._on_task_complete)
+        self._left_panel.task_uncomplete.connect(self._on_task_uncomplete)
         self._left_panel.task_delete.connect(self._on_task_delete)
         self._left_panel.reminder_dismiss.connect(self._on_reminder_dismiss)
         self._chat_panel.message_sent.connect(self._on_message_sent)
@@ -279,8 +280,9 @@ class AllianceTerminal(QWidget):
             pass
 
     def _start_reminders(self):
-        self._rem_worker = ReminderWorker(self._logic)
+        self._rem_worker = ReminderWorker(self._logic, self._memory)
         self._rem_worker.reminder_ready.connect(self._chat_panel.append_reminder)
+        self._rem_worker.proactive_trigger.connect(self._trigger_proactive_ai)
         self._rem_worker.start()
 
     def _load_panel_data(self):
@@ -336,9 +338,27 @@ class AllianceTerminal(QWidget):
                 self._chat_panel.on_generation_done({"response": f"[FILE NOT FOUND] {target}"})
             return
 
+        # NATIVE BYPASS: Update the sleep anchor instantly without AI lag
+        if self._logic.adjust_sleep_if_awake():
+            self._refresh_schedule()
+
         self._chat_panel.start_generation(text)
 
         self._ai_worker = AiWorker(self._ai, self._memory, self._logic, text)
+        self._ai_worker.token_streamed.connect(self._chat_panel.on_token)
+        self._ai_worker.generation_done.connect(self._on_generation_done)
+        self._ai_worker.generation_error.connect(self._chat_panel.on_generation_error)
+        self._ai_worker.start()
+
+    def _trigger_proactive_ai(self, system_instruction: str):
+        if self._ai_worker and self._ai_worker.isRunning():
+            return
+            
+        # Add visual context for the proactive task
+        self._chat_panel.start_proactive_generation()
+        
+        prompt = f"[SYSTEM PROACTIVE TASK: Omit conversational pleasantries if answering this. {system_instruction}]"
+        self._ai_worker = AiWorker(self._ai, self._memory, self._logic, prompt)
         self._ai_worker.token_streamed.connect(self._chat_panel.on_token)
         self._ai_worker.generation_done.connect(self._on_generation_done)
         self._ai_worker.generation_error.connect(self._chat_panel.on_generation_error)
@@ -367,6 +387,11 @@ class AllianceTerminal(QWidget):
 
     def _on_task_complete(self, task_id: str):
         self._logic.mark_task_complete(task_id)
+        self._refresh_tasks()
+        self._refresh_schedule()
+
+    def _on_task_uncomplete(self, task_id: str):
+        self._logic.unmark_task_complete(task_id)
         self._refresh_tasks()
         self._refresh_schedule()
 

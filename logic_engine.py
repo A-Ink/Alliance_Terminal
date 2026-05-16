@@ -50,6 +50,7 @@ class LogicEngine:
         self.overflow_queue: List[Dict[str, Any]] = []
         self.user_energy: int = 100
         self._suppress_anchors = False                    # NEW: avoid re-injection during shifts
+        self._last_proactive_time: float = 0.0            # NEW: proactive cooldown tracking
         self._load_state()
 
     def _load_state(self):
@@ -84,84 +85,180 @@ class LogicEngine:
 
     def _calculate_current_energy(self) -> Dict[str, Any]:
         """
-        Synthesizes the energy score (0-100) based on biological and cognitive factors.
+        Synthesizes the energy score (clamped 15-100) using a continuous circadian framework mapped to Anchors.
         """
         now = datetime.now()
         today_str = now.date().isoformat()
         
-        score = self.user_energy # Start with user-reported or baseline
+        day_tasks = self.schedule_db.get(today_str, [])
+        now_m = now.hour * 60 + now.minute
         penalties = []
         
-        # 1. Sleep Debt Penalty (-5 per hour of debt)
+        # 1. Base Circadian Decay
+        wake = next((t for t in day_tasks if "wake" in t.get('activity', '').lower()), None)
+        sleep = next((t for t in day_tasks if "sleep" in t.get('activity', '').lower()), None)
+        
+        wake_m = self._time_to_minutes(wake['start_time']) if wake else 420
+        sleep_m = self._time_to_minutes(sleep['start_time']) if sleep else 1380
+        
+        if sleep_m <= wake_m: sleep_m += 1440 # Cross-midnight adjustment
+        total_awake = max(sleep_m - wake_m, 60)
+        
+        # Adjust now_m for past-midnight sleepers
+        calc_now_m = now_m + 1440 if now_m < wake_m and now.hour < 5 else now_m
+        current_awake = calc_now_m - wake_m
+
+        if current_awake < 0:
+            score = 100
+        elif current_awake >= total_awake:
+            score = 15 # Exhausted floor cap
+        else:
+            # Linear decay from 100% to 15%
+            score = 100 - (current_awake / total_awake) * 85
+            
+        # 2. Sleep Debt Flat Penalty (-5 per hour of debt)
         debt_mins = self._calculate_sleep_debt(today_str)
         if debt_mins > 0:
             debt_penalty = int((debt_mins / 60) * 5)
             score -= debt_penalty
-            penalties.append(f"Sleep Debt: -{debt_penalty}")
+            if debt_penalty > 0: penalties.append(f"Sleep Debt: -{debt_penalty}")
 
-        # 2. Selective Cognitive/Social Drain
-        # Thinking: study, exam, code, math, logic, analysis, project, writing, research
-        # Social: meeting, social, party, call, lecture, seminar, class, interview, group
+        # 3. Dynamic Cognitive/Social Drain
         thinking_k = ["study", "exam", "code", "math", "logic", "analysis", "project", "writing", "research"]
         social_k = ["meeting", "social", "party", "call", "lecture", "seminar", "class", "interview", "group"]
         
-        day_tasks = self.schedule_db.get(today_str, [])
         drain = 0
         for t in day_tasks:
             if "start_time" not in t: continue
-            h, m = map(int, t['start_time'].split(':'))
-            st = h * 60 + m
-            # Only count completed or ongoing tasks today
-            if st < now.hour * 60 + now.minute:
+            st = self._time_to_minutes(t['start_time'])
+            if st < now_m:
                 activity = t['activity'].lower()
-                is_taxing = any(k in activity for k in thinking_k + social_k)
-                if is_taxing and t.get('priority', 5) >= 8:
-                    # Drain at -10 per hour
-                    task_drain = int((t['duration'] / 60) * 10)
+                if any(k in activity for k in thinking_k + social_k):
+                    # Faster drain for intense tasks (-15 per hour)
+                    task_drain = int((t['duration'] / 60) * 15)
                     drain += task_drain
-        
+                    
         if drain > 0:
             score -= drain
-            penalties.append(f"Cognitive/Social Drain: -{drain}")
+            penalties.append(f"Intellectual Limit: -{drain}")
 
-        # 3. Post-Meal Dip (Food Coma)
-        # -25 energy for 90 minutes after "Lunch" or "Dinner"
+        # 4. Metabolic Cycles (Thermic Effect & Food Comas)
         for t in day_tasks:
-            if t.get('type') == "meal" and ("lunch" in t['activity'].lower() or "dinner" in t['activity'].lower()):
-                h, m = map(int, t['start_time'].split(':'))
-                meal_end = h * 60 + m + t['duration']
-                now_m = now.hour * 60 + now.minute
-                if meal_end <= now_m < meal_end + 90:
-                    score -= 25
-                    penalties.append("Post-Meal Lethargy: -25")
-                    break
-
-        # 4. Recovery Boosts (Completed Tasks)
-        # Powernap: +30, Snack: +15
+            if t.get('type') == "meal":
+                act = t['activity'].lower()
+                meal_start = self._time_to_minutes(t['start_time'])
+                meal_end = meal_start + t['duration']
+                
+                if "lunch" in act and meal_end <= now_m < meal_end + 120:
+                    score -= 20
+                    penalties.append("Food Coma (Lunch): -20")
+                elif "dinner" in act and meal_end <= now_m < meal_end + 90:
+                    score -= 10
+                    penalties.append("Food Coma (Dinner): -10")
+        
+        # 5. Environmental modifiers
+        if 840 <= now_m <= 960: # 14:00 - 16:00
+            score -= 10
+            penalties.append("Afternoon Heat Shift: -10")
+            
+        # 6. Recovery Boosts (Completed Tasks)
         for t in day_tasks:
             if "start_time" not in t: continue
-            h, m = map(int, t['start_time'].split(':'))
-            st = h * 60 + m
-            # Only count completed tasks
-            if st + t['duration'] <= now.hour * 60 + now.minute:
+            st = self._time_to_minutes(t['start_time'])
+            if st + t['duration'] <= now_m:
                 act = t['activity'].lower()
-                if "powernap" in act:
-                    score += 30
-                    penalties.append("Powernap Recovery: +30")
-                elif "snack" in act:
+                if "snack" in act:
                     score += 15
-                    penalties.append("Snack Boost: +15")
+                    penalties.append("Glucose Recovery: +15")
+                elif "powernap" in act:
+                    score += 30
+                    penalties.append("Powernap Flush: +30")
 
-        score = max(0, min(100, score))
+        # Clamp limits
+        score = max(15, min(100, score))
         
-        # Status Label
-        if score > 80: status = "EXCELLENT"
-        elif score > 60: status = "NOMINAL"
-        elif score > 40: status = "DEGRADED"
-        elif score > 20: status = "CRITICAL"
+        # Status Label Matrix
+        if score >= 80: status = "EXCELLENT"
+        elif score >= 55: status = "NOMINAL"
+        elif score >= 35: status = "DEGRADED"
+        elif score >= 20: status = "CRITICAL"
         else: status = "EXHAUSTED"
         
         return {"score": score, "status": status, "penalties": penalties}
+    def adjust_sleep_if_awake(self) -> bool:
+        """
+        Shifts Sleep time to 10 mins from now if the user interacts with the terminal during scheduled Sleep.
+        Bypasses AI to prevent infinite hallucination loops.
+        """
+        now = datetime.now()
+        target_date = now.date().isoformat()
+        now_m = now.hour * 60 + now.minute
+        
+        # Pull today's Wake anchor to find our morning chronological limit
+        day_tasks = self.schedule_db.get(target_date, [])
+        wake_ev = next((t for t in day_tasks if "wake" in t.get("activity", "").lower()), None)
+        wake_m = self._time_to_minutes(wake_ev['start_time']) if wake_ev else 420
+        
+        # Crucial Fix: If it is currently Before Wake (e.g. 03:00 AM), our "Active" sleep period actually started YESTERDAY
+        sleep_date = target_date
+        if now_m < wake_m:
+            sleep_date = (now - timedelta(days=1)).date().isoformat()
+            
+        sleep_tasks = self.schedule_db.get(sleep_date, [])
+        sleep_ev = next((t for t in sleep_tasks if "sleep" in t.get("activity", "").lower()), None)
+        
+        if not sleep_ev: return False
+        
+        sleep_m = self._time_to_minutes(sleep_ev['start_time'])
+        
+        is_awake = False
+        is_awake = False
+        is_early_riser = False
+        
+        # Chrono-Boundary checks
+        if now_m < wake_m: 
+            if (wake_m - now_m) <= 120:
+                is_early_riser = True
+            else:
+                is_awake = True
+        elif now_m >= sleep_m and sleep_m >= wake_m: # E.g. 23:30, Sleep is 23:00
+            is_awake = True
+
+        if is_early_riser:
+            log.info(f"Early Riser Intercept: Commander active at {now.strftime('%H:%M')}. Shifting Wake back to now.")
+            if wake_ev:
+                wake_ev['start_time'] = now.strftime('%H:%M')
+                wake_ev['is_placeholder'] = False # Marked visually confirmed
+                
+            if sleep_ev:
+                # Shrink yesterday's sleep duration
+                new_dur = max(60, (now_m if now_m >= sleep_m else now_m + 1440) - sleep_m)
+                sleep_ev['duration'] = new_dur
+                sleep_ev['is_placeholder'] = False
+                
+            self._save_state()
+            return True
+
+        if is_awake:
+            # Shift sleep block forward by 10m
+            new_m = now_m + 10
+            sh, sm = (new_m // 60) % 24, new_m % 60
+            
+            # Use strict mod physics for safe time representations
+            log.info(f"Night Owl Intercept: Commander active at {now.strftime('%H:%M')}. Shifting Sleep to {sh:02d}:{sm:02d}.")
+            
+            # Mutate inline to avoid _force_slot recursive bounding logic
+            sleep_ev['start_time'] = f"{sh:02d}:{sm:02d}"
+            
+            # Recalculate duration so they don't oversleep past Wake
+            wake_abs = wake_m if wake_m >= new_m else wake_m + 1440
+            new_dur = max(60, wake_abs - new_m)
+            sleep_ev['duration'] = new_dur
+            
+            self._save_state()
+            return True
+            
+        return False
 
     def _init_day(self, target_date: str):
         """Ensures a date entry exists and runs daily biological checks."""
@@ -183,7 +280,6 @@ class LogicEngine:
     def _inject_daily_biological_anchors(self, target_date: str):
         """Ensures Sleep, Wake, and Meals exist. Re-injects placeholders if missing."""
         tasks = self.schedule_db.get(target_date, [])
-        activities = [t['activity'].lower() for t in tasks]
         
         # Sequence definition
         placeholders = [
@@ -197,15 +293,29 @@ class LogicEngine:
         
         for name, start, dur, pri, t_type in placeholders:
             match = False
-            for act in activities:
-                # Fuzzy match to detect existing user version
-                if name.lower() in act or act in name.lower():
-                    match = True
-                    break
+            for t in tasks:
+                act = t.get('activity', '').lower()
+                c_type = t.get('type')
+                
+                # Strict matching: Don't let random tasks override biological needs
+                if c_type == t_type:
+                    if t_type == "meal" and name.lower() in act:
+                        match = True
+                        break
+                    elif t_type in ["sleep", "biological"] and (name.lower() in act or c_type == t_type):
+                        match = True
+                        break
             
             if not match:
                 log.info(f"Injecting persistent placeholder for {name} on {target_date}")
                 self._force_slot(target_date, start, dur, name, pri, t_type)
+
+                # Find the newly added task and flag it as an auto-placeholder 
+                # (so proactive triggers know we can override it later)
+                for t in self.schedule_db[target_date]:
+                    if t.get('activity') == name:
+                        t['is_placeholder'] = True
+
         
     def _align_biological_anchors(self, target_date: str, pending_intent: Optional[UserIntent] = None):
         """Re-calculates Wake and Breakfast based on the first P9 commitment of the day."""
@@ -572,8 +682,12 @@ class LogicEngine:
         # 2. Waterfall Parser (AM/PM and 24h)
         formats = [
             "%H:%M",       # 20:30
+            "%H%M",        # 2030
             "%I:%M%p",      # 8:30pm
             "%I:%M %p",     # 8:30 pm
+            "%I.%M%p",      # 8.30pm
+            "%I.%M %p",     # 8.30 pm
+            "%H.%M",        # 20.30
             "%I%p",         # 8pm
             "%I %p",        # 8 pm
             "%H",           # 20
@@ -612,8 +726,8 @@ class LogicEngine:
         # 2. CONTROLLED DELETIONS/MODIFICATIONS (Context-Aware Base Time)
         base_time_for_delta = None
         preserved_type = "task"
+        found_original = False
         if intent.action in ["delete", "modify"]:
-            found_original = False
             search_dates = [target_date] if intent.date_reference else [date.today().isoformat(), (date.today() + timedelta(days=1)).isoformat()]
             
             for d_str in search_dates:
@@ -678,10 +792,18 @@ class LogicEngine:
                     match = True
                 
                 # BIOLOGICAL COMPANION DEDUPLICATION
-                # If we are adding Sleep, we MUST clear any existing Wake anchors too
-                if ("sleep" in name or "bedtime" in name) and ("wake" in act):
-                    match = True
-                
+                # Prevent duplicate Sleeps or Wakes, but DO NOT delete Wake when Sleep is updated!
+                if t.get('type') in ["sleep", "biological"]:
+                    if ("sleep" in name or "bedtime" in name) and "sleep" in act:
+                        match = True
+                    elif "wake" in name and "wake" in act:
+                        match = True
+                elif t.get('type') == 'meal':
+                    # Block duplicate main meals (Breakfast, Lunch, Dinner)
+                    for meal_name in ["breakfast", "lunch", "dinner"]:
+                        if meal_name in name and meal_name in act:
+                            match = True
+                            
                 if match:
                     if not found_duplicate:
                         if not base_time_for_delta: # Only set if not already set by modify block
@@ -757,12 +879,13 @@ class LogicEngine:
         if any(k in name for k in meal_ks):
             intent.priority = max(intent.priority, 8)
 
-        # LLM-supplied clock times can be in the past; never place fixed tasks earlier than now today.
+        # LLM-supplied clock times can be in the past; never place NEW fixed tasks earlier than now today.
         if (
             intent.intent_type == "fixed_event"
             and intent.start_time_reference
             and target_date == date.today().isoformat()
             and not intent.auto_schedule
+            and not (found_duplicate or found_original)
         ):
             now_m = now.hour * 60 + now.minute
             slot_m = self._time_to_minutes(intent.start_time_reference)
@@ -850,6 +973,8 @@ class LogicEngine:
         now_m = now.hour * 60 + now.minute
         
         for t in day_tasks:
+            if "start_time" not in t:
+                continue
             h, m = map(int, t['start_time'].split(':'))
             sm = h * 60 + m
             diff = sm - now_m
@@ -862,6 +987,64 @@ class LogicEngine:
                     f"That's in {diff} minutes."
                 )
         return reminders
+
+    def check_proactive_triggers(self, dossier_count: int) -> Optional[str]:
+        """Examines the schedule and dossier to proactively ask the user questions."""
+        import time
+        now_ts = time.time()
+        
+        # 30-minute global cooldown for proactive triggers
+        if now_ts - self._last_proactive_time < 1800:
+            return None
+
+        # 1. Missing intelligence data
+        if dossier_count == 0:
+            self._last_proactive_time = now_ts
+            return "The Commander's dossier is currently empty. Introduce yourself and ask them 2 quick questions to learn their daily routine or goals so you can assist them better."
+
+        now = datetime.now()
+        today_str = now.date().isoformat()
+        day_tasks = self.schedule_db.get(today_str, [])
+        now_m = now.hour * 60 + now.minute
+
+        # 2. Unconfirmed Biological Anchors
+        # Check if default Wake/Meals are still system templates via is_placeholder
+        wake_ev = next((t for t in day_tasks if "wake" in t.get("activity", "").lower()), None)
+        if wake_ev and wake_ev.get("is_placeholder") and now.hour >= 9:
+            self._last_proactive_time = now_ts
+            return "The current wake time anchor is a system default. Proactively ask the Commander what time they woke up today so you can accurately calibrate the energy simulator."
+
+        b_ev = next((t for t in day_tasks if "breakfast" in t.get("activity", "").lower()), None)
+        if b_ev and b_ev.get("is_placeholder") and now.hour >= 10:
+            self._last_proactive_time = now_ts
+            return "The Commander has not logged their Breakfast time. Proactively ask them what they had for breakfast to activate the morning metabolism model."
+
+        l_ev = next((t for t in day_tasks if "lunch" in t.get("activity", "").lower()), None)
+        if l_ev and l_ev.get("is_placeholder") and now.hour >= 14:
+            self._last_proactive_time = now_ts
+            return "The Commander has not logged their Lunch time. Proactively ask them if they have eaten lunch yet to calculate afternoon food comas."
+
+        d_ev = next((t for t in day_tasks if "dinner" in t.get("activity", "").lower()), None)
+        if d_ev and d_ev.get("is_placeholder") and now.hour >= 20:
+            self._last_proactive_time = now_ts
+            return "The Commander has not logged their Dinner time. Proactively ask them if they have eaten dinner yet to calculate late-night digestion."
+
+        # 3. Follow-up on recently ended events
+        for t in day_tasks:
+            if t.get('completed') or "start_time" not in t:
+                continue
+            h, m = map(int, t['start_time'].split(':'))
+            sm = h * 60 + m
+            em = sm + t.get('duration', 60)
+            
+            # If the event ended exactly between 5 and 35 mins ago, ask about it
+            if 5 < (now_m - em) <= 35:
+                # Don't ask about sleep/meals generally, just tasks
+                if t.get('type') not in ['meal', 'sleep', 'biological']:
+                    self._last_proactive_time = now_ts
+                    return f"The scheduled task '{t['activity']}' recently ended. Proactively ask the Commander how it went and if they finished it."
+
+        return None
 
     def get_mood(self) -> dict:
         """Predicts agent 'mood' based on time of day."""
@@ -999,6 +1182,14 @@ class LogicEngine:
         except Exception:
             pass
         return base_priority
+    def _chrono_sort_key(self, task: dict) -> int:
+        if 'start_time' not in task: return 0
+        h, m = map(int, task['start_time'].split(':'))
+        tm = h * 60 + m
+        # Late night sleep visually and computationally wrapped to bottom
+        if "sleep" in task.get('activity', '').lower() and tm < 300:
+            tm += 1440
+        return tm
 
     def _force_slot(self, target_date: str, start_time: str, duration: int, activity: str, priority: int, t_type: str = "task", deadline: str = "") -> bool:
         """The Ripple Rescheduler: Evicts lower-priority overlaps and re-queues them."""
@@ -1007,7 +1198,15 @@ class LogicEngine:
         # Calculate numeric time frames
         h, m = map(int, start_time.split(':'))
         new_start = h * 60 + m
+        if "sleep" in activity.lower() and new_start < 300: # Late night wraps to end of day
+            new_start += 1440
         new_end = new_start + duration
+        
+        # Absolute biological and meal sequence guard
+        w_start, w_end = self._apply_sequence_constraints(target_date, activity, 0, 2800)
+        if new_start < w_start or new_end > w_end:
+            log.warning(f"Sequence Violation: '{activity}' @ {start_time} violates biological bounds ({w_start} - {w_end}). Rejected.")
+            return False
         
         effective_priority = self._apply_deadline_gravity(priority, deadline)
         
@@ -1049,7 +1248,7 @@ class LogicEngine:
                         # If date changed, move the task to the new day's list
                         if final_date != target_date:
                             self.schedule_db[final_date].append(task)
-                            self.schedule_db[final_date].sort(key=lambda x: x['start_time'])
+                            self.schedule_db[final_date].sort(key=self._chrono_sort_key)
                             continue # Don't add to survivors for the CURRENT date
                         
                         survivors.append(task)
@@ -1078,8 +1277,8 @@ class LogicEngine:
             "completed": False # New flag
         })
         
-        # Re-sort and save
-        survivors.sort(key=lambda x: x['start_time'])
+        # Re-sort and save (Using mod 1440 chronological wrap)
+        survivors.sort(key=self._chrono_sort_key)
         self.schedule_db[target_date] = survivors
         
         # Attempt to re-pack evicted tasks
@@ -1088,20 +1287,35 @@ class LogicEngine:
             
         return True
 
-    def _apply_meal_sequence_constraints(self, target_date: str, activity: str, w_start: int, w_end: int) -> Tuple[int, int]:
-        """Ensures Breakfast < Lunch < Dinner sequence is preserved during shifting."""
+    def _apply_sequence_constraints(self, target_date: str, activity: str, w_start: int, w_end: int) -> Tuple[int, int]:
+        """Ensures Wake < Breakfast < Lunch < Dinner < Sleep sequence is strictly upheld. Caps standard tasks directly between Wake and Sleep."""
         name = activity.lower()
-        order = {"breakfast": 0, "lunch": 1, "dinner": 2}
+        order = {"wake": 0, "breakfast": 1, "lunch": 2, "dinner": 3, "bedtime": 4, "sleep": 4}
         
-        # Snacks, Supper, and others are exempt
+        day_tasks = self.schedule_db.get(target_date, [])
+        
+        # 1. Base boundaries: NOTHING can happen between Sleep and Wake
+        wake = next((t for t in day_tasks if "wake" in t['activity'].lower()), None)
+        sleep = next((t for t in day_tasks if "sleep" in t['activity'].lower()), None)
+        
+        if wake and "wake" not in name:
+            wake_m = self._time_to_minutes(wake['start_time'])
+            w_start = max(w_start, wake_m)
+            
+        if sleep and "sleep" not in name and "bedtime" not in name:
+            sleep_m = self._time_to_minutes(sleep['start_time'])
+            if sleep_m < 300: sleep_m += 1440
+            w_end = min(w_end, sleep_m)
+            
+        # 2. Meal Specific Boundaries (Hierarchical constraints inside the base boundary)
         if not any(m in name for m in order):
             return w_start, w_end
             
         current_idx = next(idx for m, idx in order.items() if m in name)
         
-        # Find existing meals on this date
+        # Find existing biological events on this date
         meals = []
-        for t in self.schedule_db.get(target_date, []):
+        for t in day_tasks:
             act = t['activity'].lower()
             if any(m in act for m in order):
                 idx = next(idx for m, idx in order.items() if m in act)
@@ -1109,18 +1323,19 @@ class LogicEngine:
                 if name in act or act in name: continue
                 
                 m_start = self._time_to_minutes(t['start_time'])
+                if "sleep" in act and m_start < 300: # Push 2am sleep to the end
+                    m_start += 1440
                 meals.append({"idx": idx, "start": m_start, "end": m_start + t['duration']})
         
-        # Apply constraints based on order
+        # Apply constraints based on relative order
         for m in meals:
             if m['idx'] < current_idx:
-                # This is a predecessor (e.g. Lunch checking Breakfast)
+                # Predecessors must occur BEFORE us
                 w_start = max(w_start, m['end'])
             if m['idx'] > current_idx:
-                # This is a successor (e.g. Lunch checking Dinner)
+                # Successors must occur AFTER us
                 w_end = min(w_end, m['start'])
                 
-        # Final safety: Breakfast/Lunch cannot cross midnight (already handled by w_end usually)
         return w_start, w_end
 
     def queue_flexible(self, target_date: str, activity: str, duration: int, priority: int, window: str = "now", deadline: str = "") -> bool:
@@ -1145,7 +1360,7 @@ class LogicEngine:
         elif "now" in window and target_date == now.date().isoformat():
             w_start = now.hour * 60 + now.minute + 1
             # MEAL SEQUENCE PROTECTION: Ensure Breakfast < Lunch < Dinner
-            w_start, w_end = self._apply_meal_sequence_constraints(target_date, activity, w_start, w_end)
+            w_start, w_end = self._apply_sequence_constraints(target_date, activity, w_start, w_end)
         elif ":" in window: # Specific time like "00:00"
             wh, wm = map(int, window.split(':'))
             w_start = wh * 60 + wm
@@ -1279,11 +1494,50 @@ class LogicEngine:
 
     def mark_task_complete(self, task_id: str):
         """Mark a task complete by ID (called from UI checkbox)."""
+        from datetime import date
+        target_name = None
         for t in self.tasks_db:
             if t.get("id") == task_id:
                 t["completed"] = True
+                target_name = t.get("name")
                 log.info(f"Task {task_id} marked complete via UI")
                 break
+
+        # Remove from active schedule so it visually disappears
+        if target_name:
+            today_str = date.today().isoformat()
+            sched = self.schedule_db.get(today_str, [])
+            new_sched = [ev for ev in sched if ev.get("activity") != target_name]
+            if len(new_sched) < len(sched):
+                log.info(f"Scrubbed completed task '{target_name}' from timeline.")
+                self.schedule_db[today_str] = new_sched
+
+        self._save_state()
+
+    def unmark_task_complete(self, task_id: str):
+        """Unmark a task complete by ID and dynamically re-inject into schedule."""
+        from datetime import date
+        target = None
+        for t in self.tasks_db:
+            if t.get("id") == task_id:
+                t["completed"] = False
+                target = t
+                log.info(f"Task {task_id} unmarked complete via UI")
+                break
+
+        if target:
+            today_str = date.today().isoformat()
+            self._init_day(today_str)
+            # Route back into the Ripple Rescheduler for automatic gap filling
+            self.queue_flexible(
+                target_date=today_str,
+                activity=target.get("name", "Unknown Task"),
+                duration=target.get("duration", 60),
+                priority=target.get("priority", 5),
+                window="now",
+                deadline=target.get("deadline", "")
+            )
+
         self._save_state()
 
     def delete_task(self, task_id: str):
