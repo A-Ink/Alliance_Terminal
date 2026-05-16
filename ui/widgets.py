@@ -678,42 +678,31 @@ class ChatBubble(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ThinkingDots(QWidget):
-    """Three sequential pulsing dots — Mass Effect tactical analysis style."""
+    """Simple animated 'Analyzing...' indicator."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(30)
+        self.setFixedHeight(26)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 4, 10, 4)
-        lay.setSpacing(10)
+        lay.setContentsMargins(12, 4, 10, 4)
+        lay.setSpacing(0)
 
-        lbl = QLabel("TACTICAL ANALYSIS")
-        lbl.setFont(font_orbitron(8))
-        lbl.setStyleSheet(f"color: {C_TEXT_DIM}; letter-spacing: 2px; background: transparent;")
-        lay.addWidget(lbl)
-
-        self._dots = []
-        for _ in range(3):
-            d = QLabel("◈")
-            d.setFont(font_orbitron(11))
-            d.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent;")
-            lay.addWidget(d)
-            self._dots.append(d)
-
+        self._lbl = QLabel("Analyzing")
+        self._lbl.setFont(font_body(11))
+        self._lbl.setStyleSheet(f"color: {C_TEXT_DIM}; background: transparent;")
+        lay.addWidget(self._lbl)
         lay.addStretch()
 
         self._phase = 0
         self._t = QTimer(self)
         self._t.timeout.connect(self._tick)
-        self._t.start(300)
+        self._t.start(400)
 
     def _tick(self):
-        for i, d in enumerate(self._dots):
-            d.setStyleSheet(
-                f"color: {C_CYAN}; background: transparent;" if i == self._phase
-                else f"color: {C_TEXT_DIM}; background: transparent;"
-            )
-        self._phase = (self._phase + 1) % 3
+        self._phase = (self._phase + 1) % 4
+        dots = "." * self._phase
+        self._lbl.setText(f"Analyzing{dots}")
 
     def stop(self):
         self._t.stop()
+

@@ -459,6 +459,15 @@ class ChatPanel(QWidget):
     def append_reminder(self, html: str):
         self._add_bubble(self.REMINDER, html, "reminder")
 
+    def set_input_enabled(self, enabled: bool):
+        """Enable or disable the input area (used during model swaps)."""
+        self._input.setEnabled(enabled)
+        self._send_btn.setEnabled(enabled and not self._busy)
+        if not enabled:
+            self._input.setPlaceholderText("Core transfer in progress...")
+        else:
+            self._input.setPlaceholderText("Transmit command to Normandy...")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # RIGHT PANEL — Mood/Energy + Schedule

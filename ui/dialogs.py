@@ -29,10 +29,12 @@ _MODEL_DIR   = Path(__file__).parent.parent / "model"
 
 # ── Descriptions for each model (supplemental, since config.json is minimal) ──
 _MODEL_DESCRIPTIONS = {
-    "qwen-2.5-7b":  "A well-rounded 7B general-purpose model. Excellent for scheduling, tasking, and day-to-day assist commands. Optimised for balanced speed and intelligence on Intel NPU.",
-    "qwen-3-8b":    "Upgraded reasoning core with improved chain-of-thought depth. Best for complex planning, multi-step analysis, and nuanced decision support. Slightly slower on first inference.",
-    "phi-4-mini":   "Lightweight speed core. Fastest response times, minimal VRAM footprint. Ideal for quick queries, reminders, and simple tasking when battery efficiency is critical.",
-    "mistral-7b":   "High-precision execution core tuned for precise, structured outputs. Optimal for technical questions and rigorous schedule management with minimal hallucination.",
+    "qwen-2.5-7b":     "A well-rounded 7B general-purpose model. Excellent for scheduling, tasking, and day-to-day assist commands. Optimised for balanced speed and intelligence on Intel NPU.",
+    "qwen-3-8b":       "Upgraded reasoning core with improved chain-of-thought depth. Best for complex planning, multi-step analysis, and nuanced decision support. Slightly slower on first inference.",
+    "phi-4-mini":      "Lightweight speed core. Fastest response times, minimal VRAM footprint. Ideal for quick queries, reminders, and simple tasking when battery efficiency is critical.",
+    "mistral-7b":      "High-precision execution core tuned for precise, structured outputs. Optimal for technical questions and rigorous schedule management with minimal hallucination.",
+    "gemma-4-26b-gpu": "26B Mixture-of-Experts tactical core. Runs on dGPU via CUDA. Excellent reasoning and instruction following with efficient active parameter usage (~4B active per token).",
+    "qwen-3.6-27b-gpu": "27B dense heavy-duty core. Runs on dGPU via CUDA. Maximum reasoning depth for complex multi-step planning, scheduling logic, and nuanced analysis.",
 }
 
 
@@ -201,8 +203,16 @@ class ModelSwitcherDialog(_BaseDialog):
         cards_lay.addStretch()
 
     def _model_is_downloaded(self, info: dict) -> bool:
-        model_path = Path(__file__).parent.parent / info.get("path", "").lstrip("./")
-        return model_path.exists() and any(model_path.iterdir()) if model_path.exists() else False
+        raw_path = info.get("path", "")
+        model_path = Path(__file__).parent.parent / raw_path.lstrip("./")
+        engine = info.get("engine", "openvino")
+
+        if engine == "llama.cpp":
+            # GGUF models are single files
+            return model_path.is_file()
+        else:
+            # OpenVINO models are directories
+            return model_path.is_dir() and any(model_path.iterdir())
 
     def _add_model_card(self, lay, key: str, info: dict, is_active: bool):
         downloaded = self._model_is_downloaded(info)

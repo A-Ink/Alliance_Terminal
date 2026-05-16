@@ -26,6 +26,10 @@ class AiWorker(QThread):
 
     def run(self):
         try:
+            # Clear any stale abort signal before starting generation
+            if hasattr(self._ai, '_abort_event'):
+                self._ai._abort_event.clear()
+
             relevant_facts = self._memory.query_relevant(self._text, n=5)
             codex_text     = "\n".join(f"• {f}" for f in relevant_facts)
             schedule_text  = self._logic.get_context_for_ai()
@@ -34,8 +38,22 @@ class AiWorker(QThread):
             def stream_cb(token: str):
                 self.token_streamed.emit(token.replace('\n', '<br>'))
 
-            response_html, facts, schedule_updates, tasks_updates, reminders_updates, sleep_wake = \
+            response_html, facts, schedule_updates, tasks_updates, reminders_updates, sleep_wake, requires_deep = \
                 self._ai._generate_sync(self._text, rag_context, stream_callback=stream_cb)
+
+            # Check if generation was aborted mid-stream
+            was_aborted = hasattr(self._ai, '_abort_event') and self._ai._abort_event.is_set()
+            if was_aborted:
+                log.info("[AiWorker] Generation was aborted. Emitting partial result.")
+                self.generation_done.emit({
+                    "response": response_html + "<br><span style='color:#f2a900'>[Generation interrupted — core transfer in progress]</span>",
+                    "facts_saved": False,
+                    "schedule_updated": False,
+                    "tasks_updated": False,
+                    "reminders_updated": False,
+                    "requires_deep_thought": False,
+                })
+                return
 
             facts_saved = False
             for fc in facts:
@@ -61,11 +79,12 @@ class AiWorker(QThread):
                     reminders_updated = True
 
             self.generation_done.emit({
-                "response":           response_html,
-                "facts_saved":        facts_saved,
-                "schedule_updated":   schedule_updated or bool(sleep_wake),
-                "tasks_updated":      tasks_updated,
-                "reminders_updated":  reminders_updated,
+                "response":              response_html,
+                "facts_saved":           facts_saved,
+                "schedule_updated":      schedule_updated or bool(sleep_wake),
+                "tasks_updated":         tasks_updated,
+                "reminders_updated":     reminders_updated,
+                "requires_deep_thought": requires_deep,
             })
 
         except Exception as e:

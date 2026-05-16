@@ -121,7 +121,20 @@ def main():
     print("\nAVAILABLE AI CORES:")
     for idx, key in enumerate(model_keys):
         m = models[key]
-        print(f"  [{idx + 1}] {m['display_name']} ({m.get('engine', 'openvino').upper()})")
+        engine = m.get('engine', 'openvino').upper()
+        device = m.get('target_device', 'NPU')
+        tier = "dGPU" if device == "GPU" else device
+
+        # Check if model already exists
+        model_path = SCRIPT_DIR / m.get("path", "")
+        if m.get("engine") == "llama.cpp":
+            exists = model_path.exists() and model_path.is_file()
+        else:
+            exists = model_path.exists() and model_path.is_dir() and any(model_path.iterdir())
+        status = "[DOWNLOADED]" if exists else "[NOT FOUND]"
+
+        print(f"  [{idx + 1}] {m['display_name']}")
+        print(f"       Engine: {engine} | Silicon: {tier} | {status}")
         
     choice = input("\nEnter the number of the model to requisition (or 'q' to quit): ")
     if choice.lower() == 'q': return
@@ -138,24 +151,40 @@ def main():
     
     print("\n=====================================================")
     print(f" [PHASE 1] PROCESSING MAIN CORE: {selected_model['hf_model_id']}")
+    print(f" Engine: {selected_model.get('engine', 'openvino').upper()}")
     print("=====================================================\n")
     
     try:
         # Check if the file/folder already exists
-        if not os.path.exists(target_path) or (os.path.isdir(target_path) and not os.listdir(target_path)):
-            process_model(selected_model, target_path)
+        if selected_model.get("engine") == "llama.cpp":
+            # GGUF models are single files
+            if os.path.exists(target_path) and os.path.isfile(target_path):
+                print("[OK] GGUF Core already exists on disk. Skipping download.")
+            else:
+                process_model(selected_model, target_path)
         else:
-            print("[OK] Main Core already exists on disk. Skipping download.")
+            # OpenVINO models are directories
+            if os.path.exists(target_path) and os.path.isdir(target_path) and os.listdir(target_path):
+                print("[OK] Main Core already exists on disk. Skipping download.")
+            else:
+                process_model(selected_model, target_path)
 
-        config["active_model"] = selected_key
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(config, f, indent=2)
-            
-        print(f"\n[SUCCESS] '{selected_key}' is locked in as the active model.")
+        # Only set as active_model if it's an NPU model (power manager handles GPU selection)
+        if selected_model.get("target_device", "NPU") != "GPU":
+            config["active_model"] = selected_key
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(config, f, indent=2)
+            print(f"\n[SUCCESS] '{selected_key}' is locked in as the active NPU model.")
+        else:
+            # For GPU models, update gpu_model in config
+            config["gpu_model"] = selected_key
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(config, f, indent=2)
+            print(f"\n[SUCCESS] '{selected_key}' is available as the dGPU model.")
+            print("[INFO] This model will activate automatically when AC power is detected.")
         
     except Exception as e:
         print(f"\n[ERROR] Operation failed: {e}")
 
 if __name__ == "__main__":
     main()
-    

@@ -5,6 +5,7 @@ OpenVINO GenAI LLM pipeline with NPU-first routing.
 
 import json
 import os
+import sys
 import threading
 import logging
 import re
@@ -20,17 +21,36 @@ SCRIPT_DIR = Path(__file__).parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 PROMPTS_PATH = SCRIPT_DIR / "prompts.yaml"
 
+# ── Register CUDA 12 runtime DLLs for llama.cpp (Windows only) ──────────────
+# The pre-compiled cu124 wheel needs cublas, cusparse, etc. DLLs at load time.
+# These are installed via pip (nvidia-cublas-cu12, etc.) into site-packages/nvidia/.
+# We register their directories so Windows can find them without polluting PATH.
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    _site_packages = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
+    if _site_packages.exists():
+        for _pkg_dir in _site_packages.iterdir():
+            _bin_dir = _pkg_dir / "bin"
+            _lib_dir = _pkg_dir / "lib"
+            if _bin_dir.is_dir():
+                os.add_dll_directory(str(_bin_dir))
+            if _lib_dir.is_dir():
+                os.add_dll_directory(str(_lib_dir))
+
 
 class AIBackend:
     """Manages the OpenVINO GenAI LLM pipeline with config-driven model loading."""
 
-    # JSON Schema — Split Entity Types (v2.2)
+    # JSON Schema — Split Entity Types (v3.0 — with deferral flag)
     EXTRACTION_SCHEMA = {
         "type": "object",
         "additionalProperties": False,
         "required": ["response", "schedule_events", "tasks", "reminders", "facts", "sleep_wake_update"],
         "properties": {
             "response": {"type": "string"},
+            "requires_deep_thought": {
+                "type": "boolean",
+                "description": "NPU sets true if prompt is too complex for fast inference."
+            },
             "schedule_events": {
                 "type": "array",
                 "items": {
@@ -126,23 +146,92 @@ class AIBackend:
         self.pipe = None
         self.is_loaded = False
         self._lock = threading.Lock()
+        # Abort event: set by PipelineOrchestrator to interrupt generation mid-stream
+        self._abort_event = threading.Event()
         # NPU static pipeline: prompt must fit in MAX_PROMPT_LEN; total_ctx >= prompt + generation
         self._openvino_total_context: int = int(self.model_info.get("context_size", 2048))
         self._openvino_prompt_cap: int = self._openvino_total_context  # tightened in initialize() for NPU
         
-        # Load Tailored System Prompt (Combined with Default Instructions)
+        # Load Tailored System Prompt — Tiered: NPU vs dGPU
         self.prompts = self._load_prompts()
-        default_prompt = self.prompts.get("default", "")
-        model_flavor = self.prompts.get(self.active_model_key, "")
-        
-        # Combine default core instructions with model-specific persona/flavor
-        self.system_prompt = f"{default_prompt}\n\n[CORE PERSONA & MODEL HINTS]\n{model_flavor}"
-        
-        if not default_prompt:
-             log.warning(f"No default system prompt found. AI may behave unexpectedly.")
+        self.system_prompt = self._build_system_prompt()
 
         # Initialization is handled explicitly by main.py boot sequence
         # threading.Thread(target=self.initialize, daemon=True).start()
+
+    def unload(self):
+        """
+        Safely tear down the active pipeline and release memory.
+        Called by PipelineOrchestrator before loading a new model.
+        """
+        import gc
+        with self._lock:
+            log.info("[UNLOAD] Tearing down active AI pipeline...")
+            try:
+                if self.pipe is not None:
+                    del self.pipe
+                    self.pipe = None
+                    log.info("[UNLOAD] Pipeline object deleted.")
+                self.is_loaded = False
+                gc.collect()
+                log.info("[UNLOAD] gc.collect() complete. Memory released.")
+            except Exception as e:
+                log.error(f"[UNLOAD] Error during pipeline teardown: {e}")
+                self.pipe = None
+                self.is_loaded = False
+
+    def reload(self, model_key: str):
+        """
+        Reload the backend with a different model from config.json.
+        Re-reads config, updates all internal state, and calls initialize().
+
+        Args:
+            model_key: The key in config.json["models"] to load (e.g., "gemma-4-26b-gpu")
+        """
+        log.info(f"[RELOAD] Reloading AI backend with model key: '{model_key}'")
+        try:
+            # Re-read config in case it was modified
+            self.config = self._load_config()
+            model_info = self.config.get("models", {}).get(model_key)
+
+            if not model_info:
+                log.error(f"[RELOAD] Model key '{model_key}' not found in config.json!")
+                raise ValueError(f"Unknown model key: {model_key}")
+
+            # Update all internal state
+            self.active_model_key = model_key
+            self.model_info = model_info
+            self.display_name = model_info.get("display_name", "Unknown Core")
+            self.model_path = str(SCRIPT_DIR / model_info.get("path", ""))
+            self.engine_type = model_info.get("engine", "openvino")
+            self.target_device = model_info.get("target_device", "NPU")
+            self.model_name = self.display_name
+            self.device_used = self.target_device
+
+            # Reset context tracking for the new model
+            self._openvino_total_context = int(model_info.get("context_size", 2048))
+            self._openvino_prompt_cap = self._openvino_total_context
+
+            # Reload prompts (tier-aware: npu_default vs gpu_default)
+            self.prompts = self._load_prompts()
+            self.system_prompt = self._build_system_prompt()
+
+            # Clear abort event for the new pipeline
+            self._abort_event.clear()
+
+            # Initialize the new pipeline
+            log.info(f"[RELOAD] Calling initialize() for {self.display_name} on {self.target_device}...")
+            self.initialize()
+
+            if self.is_loaded:
+                log.info(f"[RELOAD] ✓ Successfully loaded: {self.display_name} on {self.device_used}")
+            else:
+                log.error(f"[RELOAD] Pipeline loaded but is_loaded is False. Check initialize() logs.")
+
+        except Exception as e:
+            log.error(f"[RELOAD] Failed to reload model '{model_key}': {e}", exc_info=True)
+            self.is_loaded = False
+            raise
 
     def _get_win32_short_path(self, path: str) -> str:
         """
@@ -170,6 +259,35 @@ class AIBackend:
             except Exception as e:
                 log.error(f"Failed to load prompts.yaml: {e}")
         return {}
+
+    def _build_system_prompt(self) -> str:
+        """
+        Build the system prompt based on the active engine tier.
+        NPU models get the lean npu_default prompt.
+        dGPU models get the full gpu_default prompt.
+        Model-specific hints are appended as a suffix.
+        """
+        prompts = self.prompts
+
+        # Select tier-appropriate base prompt
+        if self.engine_type == "llama.cpp":
+            base_prompt = prompts.get("gpu_default", "")
+        elif self.engine_type == "openvino":
+            base_prompt = prompts.get("npu_default", "")
+        else:
+            base_prompt = ""
+
+        # Fall back to legacy 'default' if tier prompt is missing
+        if not base_prompt:
+            base_prompt = prompts.get("default", "")
+            if not base_prompt:
+                log.warning("No system prompt found in prompts.yaml. AI may behave unexpectedly.")
+
+        # Append model-specific hints
+        model_flavor = prompts.get(self.active_model_key, "")
+        if model_flavor:
+            return f"{base_prompt}\n\n[MODEL HINTS]\n{model_flavor}"
+        return base_prompt
 
     @property
     def available_models(self):
@@ -282,30 +400,51 @@ class AIBackend:
             try:
                 from llama_cpp import Llama
             
-                # Extract Device ID (GPU.1 -> 1) to ensure we hit the iGPU, not the dGPU.
-                vk_device = "1" 
+                # Detect GPU backend: CUDA vs Vulkan
+                # CUDA builds don't use GGML_VK_VISIBLE_DEVICES
+                is_cuda = False
+                try:
+                    import llama_cpp
+                    # Check if the build supports CUDA by inspecting available symbols
+                    # CUDA builds will have ggml_cuda in the binary
+                    build_info = getattr(llama_cpp, '__version__', 'unknown')
+                    log.info(f"[LLAMA] llama-cpp-python version: {build_info}")
+                except Exception:
+                    pass
+
+                # For Vulkan builds, set the visible device
                 if "." in self.target_device:
                     vk_device = self.target_device.split(".")[1]
+                    os.environ["GGML_VK_VISIBLE_DEVICES"] = vk_device
+                    log.info(f"[LLAMA] Vulkan device hint: {vk_device}")
+                else:
+                    log.info(f"[LLAMA] Targeting dGPU (CUDA preferred, Vulkan fallback)")
             
-                os.environ["GGML_VK_VISIBLE_DEVICES"] = vk_device
-                log.info(f"Hardware API locked to physical device ID: {vk_device}")
-            
-                # Advanced Initialization Parameters
+                # Read config-driven parameters
+                n_gpu_layers = int(self.model_info.get("n_gpu_layers", -1))
                 use_mmap = self.model_info.get("use_mmap", not self.model_info.get("no_mmap", False))
-                ctx_size = self.model_info.get("context_size", 4096)
+                ctx_size = int(self.model_info.get("context_size", 4096))
+                use_flash_attn = bool(self.model_info.get("flash_attn", False))
                 
+                log.info(f"[LLAMA] Init params: n_gpu_layers={n_gpu_layers}, ctx={ctx_size}, "
+                         f"flash_attn={use_flash_attn}, mmap={use_mmap}")
+                log.info(f"[LLAMA] Model path: {self.model_path}")
+
                 self.pipe = Llama(
                     model_path=self.model_path,
-                    n_gpu_layers=-1, 
-                    n_ctx=ctx_size,      
+                    n_gpu_layers=n_gpu_layers,
+                    n_ctx=ctx_size,
                     use_mmap=use_mmap,
-                    verbose=True    
+                    flash_attn=use_flash_attn,
+                    verbose=True
                 )
                 self.is_loaded = True
-                log.info(f"[SUCCESS] Llama.cpp Vulkan bridge established on Device {vk_device}")
+                log.info(f"[SUCCESS] Llama.cpp pipeline established: "
+                         f"{n_gpu_layers} layers offloaded, flash_attn={use_flash_attn}")
             except Exception as e:
                 log.error(f"[FATAL] Llama.cpp initialization failed: {e}")
-                self.is_loaded = False
+                import traceback
+                log.error(traceback.format_exc())
 
     @staticmethod
     def _estimate_prompt_tokens(text: str) -> int:
@@ -411,7 +550,7 @@ class AIBackend:
         with self._lock:
             if not self.is_loaded:
                 log.error("Attempted generation while core was offline.")
-                return "[ERROR] AI Core offline. Check logs.", [], [], [], [], None
+                return "[ERROR] AI Core offline. Check logs.", [], [], [], [], None, False
 
             context_block = ""
             if rag_context:
@@ -445,6 +584,10 @@ class AIBackend:
                     
                     def ov_streamer(subword: str) -> ov_genai.StreamingStatus:
                         nonlocal raw_text
+                        # Check abort event every token for graceful mid-generation halt
+                        if self._abort_event.is_set():
+                            log.info("[ABORT] Generation aborted via abort event (OpenVINO streamer).")
+                            return ov_genai.StreamingStatus.STOP
                         raw_text += subword
                         if stream_callback: stream_callback(subword)
                         return ov_genai.StreamingStatus.RUNNING
@@ -506,6 +649,10 @@ class AIBackend:
                     )
                     
                     for chunk in response:
+                        # Check abort event every token for graceful mid-generation halt
+                        if self._abort_event.is_set():
+                            log.info("[ABORT] Generation aborted via abort event (Llama.cpp chunk loop).")
+                            break
                         delta = chunk['choices'][0].get('delta', {})
                         if 'content' in delta:
                             token = delta['content']
@@ -514,14 +661,14 @@ class AIBackend:
                             
             except Exception as e:
                 log.error(f"Generation aborted: {e}")
-                return f"[CRITICAL FAILURE] {e}", [], [], [], [], None
+                return f"[CRITICAL FAILURE] {e}", [], [], [], [], None, False
 
             log.info("Generation complete. Parsing outputs...")
             res = self._post_process(raw_text)
             return res
 
     def _post_process(self, raw_text: str):
-        """Parse new split-entity schema. Returns 6-tuple."""
+        """Parse new split-entity schema. Returns 7-tuple including requires_deep_thought."""
         print("\n" + "="*60)
         print(" [AI CORE] RAW OUTPUT ".center(60, "="))
         print(raw_text)
@@ -559,6 +706,7 @@ class AIBackend:
             tasks               = data.get("tasks", [])
             reminders           = data.get("reminders", [])
             sleep_wake          = data.get("sleep_wake_update", {}) or {}
+            requires_deep       = data.get("requires_deep_thought", False)
 
             # Normalise sleep_wake: discard if both fields are null/empty
             sw_sleep = sleep_wake.get("sleep_time") or ""
@@ -652,13 +800,13 @@ class AIBackend:
             print("="*60 + "\n")
 
             clean_text = response_text.replace("\n", "<br>")
-            return clean_text, facts, schedule_events, tasks, reminders, sleep_wake
+            return clean_text, facts, schedule_events, tasks, reminders, sleep_wake, requires_deep
 
         except Exception as e:
             log.error(f"Post-process failure: {e}")
             print(f"\n[CRITICAL ERROR] Failed to parse AI output: {e}")
             print("="*60 + "\n")
-            return f"[ERROR] Output extraction failed: {e}", [], [], [], [], None
+            return f"[ERROR] Output extraction failed: {e}", [], [], [], [], None, False
 
     def get_device_info(self) -> dict:
         return {

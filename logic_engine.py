@@ -48,6 +48,7 @@ class LogicEngine:
         self.tasks_db: List[Dict[str, Any]] = []          # NEW: flexible tasks
         self.reminders_db: List[Dict[str, Any]] = []      # NEW: user reminders
         self.overflow_queue: List[Dict[str, Any]] = []
+        self.pending_deep_thought_queue: List[Dict[str, Any]] = []  # Deferral queue for dGPU
         self.user_energy: int = 100
         self._suppress_anchors = False                    # NEW: avoid re-injection during shifts
         self._last_proactive_time: float = 0.0            # NEW: proactive cooldown tracking
@@ -64,6 +65,7 @@ class LogicEngine:
                         self.user_energy  = data.get("user_energy", 100)
                         self.tasks_db     = data.get("tasks", [])
                         self.reminders_db = data.get("reminders", [])
+                        self.pending_deep_thought_queue = data.get("pending_deep_thought_queue", [])
                     else:
                         self.schedule_db  = data
                         self.user_energy  = 100
@@ -79,9 +81,42 @@ class LogicEngine:
             "user_energy": self.user_energy,
             "tasks":      self.tasks_db,
             "reminders":  self.reminders_db,
+            "pending_deep_thought_queue": self.pending_deep_thought_queue,
         }
         with open(self.state_file, 'w') as f:
             json.dump(data, f, indent=2)
+
+    # ── Deferral Queue (Phase 2) ──────────────────────────────────────────────
+
+    def enqueue_deferred(self, user_prompt: str, rag_context: str = ""):
+        """
+        Save a prompt to the deferral queue for later dGPU processing.
+        Called when the NPU sets requires_deep_thought: true.
+        """
+        entry = {
+            "prompt": user_prompt,
+            "rag_context": rag_context,
+            "queued_at": datetime.now().isoformat(),
+        }
+        self.pending_deep_thought_queue.append(entry)
+        self._save_state()
+        log.info(f"[DEFER] Queued prompt for dGPU processing: '{user_prompt[:60]}...'")
+
+    def drain_deferred_queue(self) -> List[Dict[str, Any]]:
+        """
+        Retrieve and clear all pending deferred prompts.
+        Called by the orchestrator when AC power is restored and dGPU is ready.
+        """
+        items = list(self.pending_deep_thought_queue)
+        self.pending_deep_thought_queue.clear()
+        self._save_state()
+        if items:
+            log.info(f"[DEFER] Drained {len(items)} deferred prompt(s) for dGPU processing.")
+        return items
+
+    @property
+    def has_deferred_prompts(self) -> bool:
+        return len(self.pending_deep_thought_queue) > 0
 
     def _calculate_current_energy(self) -> Dict[str, Any]:
         """

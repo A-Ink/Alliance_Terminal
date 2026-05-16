@@ -1,5 +1,5 @@
 {
-  "active_model": "qwen-2.5-7b",
+  "active_model": "gemma-4-26b-gpu",
   "cache_dir": "model_cache",
   "models": {
     "qwen-2.5-7b": {
@@ -49,8 +49,42 @@
       "context_size": 2048,
       "top_p": 0.9,
       "top_k": 40
+    },
+    "gemma-4-26b-gpu": {
+      "display_name": "Gemma 4 26B MoE \u2014 Tactical Core (dGPU)",
+      "hf_model_id": "unsloth/gemma-4-26B-A4B-it-GGUF",
+      "hf_gguf_file": "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+      "engine": "llama.cpp",
+      "target_device": "GPU",
+      "path": "./model/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "context_size": 4096,
+      "top_p": 0.9,
+      "top_k": 40,
+      "n_gpu_layers": -1,
+      "flash_attn": true,
+      "use_mmap": false
+    },
+    "qwen-3.6-27b-gpu": {
+      "display_name": "Qwen 3.6 27B Dense \u2014 Heavy Core (dGPU)",
+      "hf_model_id": "unsloth/Qwen3.6-27B-MTP-GGUF",
+      "hf_gguf_file": "Qwen3.6-27B-Q4_K_M.gguf",
+      "engine": "llama.cpp",
+      "target_device": "GPU",
+      "path": "./model/Qwen3.6-27B-Q4_K_M.gguf",
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "context_size": 4096,
+      "top_p": 0.9,
+      "top_k": 40,
+      "n_gpu_layers": -1,
+      "flash_attn": true,
+      "use_mmap": false
     }
   },
+  "npu_model": "qwen-2.5-7b",
+  "gpu_model": "gemma-4-26b-gpu",
   "device_priority": [
     "NPU",
     "GPU",

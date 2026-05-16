@@ -19,7 +19,7 @@ C_GREEN       = "#00ff88"
 C_GREEN_DIM   = "#003322"
 C_GOLD        = "#f2a900"
 C_RED         = "#ff3344"
-C_TEXT        = "#b8d4e8"
+C_TEXT        = "#c8ddf0"
 C_TEXT_BRIGHT = "#e8f4ff"
 C_TEXT_DIM    = "#4a6075"
 C_CURSOR      = "#00e5ff"
@@ -34,7 +34,7 @@ CYAN_DIM   = QColor(0, 107, 128)
 GREEN      = QColor(0, 255, 136)
 GOLD       = QColor(242, 169, 0)
 RED        = QColor(255, 51, 68)
-TEXT       = QColor(184, 212, 232)
+TEXT       = QColor(200, 221, 240)
 TEXT_BRIGHT = QColor(232, 244, 255)
 TEXT_DIM   = QColor(74, 96, 117)
 
@@ -98,7 +98,7 @@ def global_stylesheet() -> str:
         background-color: transparent;
         color: {C_TEXT};
         font-family: {S_MONTSERRAT};
-        font-size: 11px;
+        font-size: 12px;
         border: none;
     }}
     QLabel  {{ background: transparent; }}

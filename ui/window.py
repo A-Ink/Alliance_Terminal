@@ -17,6 +17,7 @@ from .workers import AiWorker, DiagnosticsWorker, ReminderWorker, BootWorker
 from .dialogs import ModelSwitcherDialog, DeviceToggleDialog, HelpDialog
 
 import logging
+from fast_path import try_fast_path
 log = logging.getLogger("normandy.window")
 
 RESIZE_MARGIN = 8   # px from window edge for resize detection
@@ -152,12 +153,15 @@ class AllianceTerminal(QWidget):
     Main application window — frameless, resizable, 3-panel layout.
     """
 
-    def __init__(self, ai, memory, logic, boot_log: list | None = None):
+    def __init__(self, ai, memory, logic, boot_log: list | None = None,
+                 power_monitor=None, orchestrator=None):
         super().__init__()
         self._ai       = ai
         self._memory   = memory
         self._logic    = logic
         self._boot_log = boot_log or []
+        self._power_monitor = power_monitor
+        self._orchestrator  = orchestrator
 
         self._left_visible  = True
         self._right_visible = True
@@ -231,6 +235,18 @@ class AllianceTerminal(QWidget):
         self._left_panel.task_delete.connect(self._on_task_delete)
         self._left_panel.reminder_dismiss.connect(self._on_reminder_dismiss)
         self._chat_panel.message_sent.connect(self._on_message_sent)
+
+        # ── Wire orchestrator signals for live swap feedback ──
+        if self._orchestrator:
+            self._orchestrator.swap_started.connect(self._on_swap_started)
+            self._orchestrator.swap_progress.connect(self._on_swap_progress)
+            self._orchestrator.swap_complete.connect(self._on_swap_complete)
+            self._orchestrator.swap_failed.connect(self._on_swap_failed)
+            self._orchestrator.deferred_ready.connect(self._on_deferred_ready)
+
+        # Track last user message for potential deferral
+        self._last_user_message: str = ""
+        self._last_rag_context: str = ""
 
         # ── Start boot sequence ──
         QTimer.singleShot(200, self._start_boot)
@@ -330,6 +346,13 @@ class AllianceTerminal(QWidget):
         if self._ai_worker and self._ai_worker.isRunning():
             return
 
+        # Block messages during model swap
+        if self._orchestrator and self._orchestrator.is_swapping:
+            self._chat_panel.on_generation_done({
+                "response": "<span style='color:#f2a900'>⬡ Core transfer in progress. Please wait...</span>"
+            })
+            return
+
         if text.strip().lower().startswith("/forget"):
             target = text.strip()[7:].strip()
             if self._memory.delete_fact(target):
@@ -338,9 +361,44 @@ class AllianceTerminal(QWidget):
                 self._chat_panel.on_generation_done({"response": f"[FILE NOT FOUND] {target}"})
             return
 
+        # ── Fast-path: regex bypass (no AI call) ──
+        fp_result = try_fast_path(text)
+        if fp_result:
+            log.info(f"[FAST-PATH] Bypassed AI for: '{text[:50]}'")
+            self._chat_panel.start_generation(text)
+
+            # Process fast-path arrays through the logic engine
+            schedule_updated = False
+            for cmd in fp_result.get("schedule_events", []):
+                if self._logic.execute_schedule_command(cmd):
+                    schedule_updated = True
+
+            tasks_updated = False
+            for t in fp_result.get("tasks", []):
+                if self._logic.execute_task_command(t):
+                    tasks_updated = True
+
+            reminders_updated = False
+            for r in fp_result.get("reminders", []):
+                if self._logic.execute_reminder_command(r):
+                    reminders_updated = True
+
+            self._on_generation_done({
+                "response": fp_result["response"],
+                "schedule_updated": schedule_updated,
+                "tasks_updated": tasks_updated,
+                "reminders_updated": reminders_updated,
+                "facts_saved": False,
+                "requires_deep_thought": False,
+            })
+            return
+
         # NATIVE BYPASS: Update the sleep anchor instantly without AI lag
         if self._logic.adjust_sleep_if_awake():
             self._refresh_schedule()
+
+        # Store for potential deferral
+        self._last_user_message = text
 
         self._chat_panel.start_generation(text)
 
@@ -365,6 +423,22 @@ class AllianceTerminal(QWidget):
         self._ai_worker.start()
 
     def _on_generation_done(self, result: dict):
+        # ── Deferral intercept: NPU flagged requires_deep_thought ──
+        if result.get("requires_deep_thought") and self._orchestrator:
+            if self._orchestrator.active_tier == "npu":
+                # Enqueue for dGPU processing when AC power restores
+                self._logic.enqueue_deferred(
+                    self._last_user_message,
+                    self._last_rag_context,
+                )
+                # Show the NPU's quick response + deferral notice
+                npu_response = result.get("response", "")
+                result["response"] = (
+                    f"{npu_response}<br>"
+                    f"<span style='color:#f2a900'>⬡ This request has been queued for deep analysis. "
+                    f"It will be processed when the dGPU comes online.</span>"
+                )
+
         self._chat_panel.on_generation_done(result)
 
         if result.get("schedule_updated"):
@@ -382,6 +456,88 @@ class AllianceTerminal(QWidget):
         if result.get("reminders_updated"):
             self._refresh_reminders()
             self._left_panel.switch_to_tab("REMINDERS")
+
+    # ── Deferred queue processing ─────────────────────────────────────────────
+
+    def _on_deferred_ready(self, deferred_items: list):
+        """Process deferred prompts now that dGPU is online."""
+        if not deferred_items:
+            return
+        count = len(deferred_items)
+        self._chat_panel.on_generation_done({
+            "response": f"<span style='color:#00e5ff'>⬡ Processing {count} deferred prompt(s) via dGPU...</span>"
+        })
+        # Process one at a time — chain via QTimer to avoid blocking
+        self._deferred_queue = list(deferred_items)
+        self._process_next_deferred()
+
+    def _process_next_deferred(self):
+        """Process the next item from the deferred queue."""
+        if not hasattr(self, '_deferred_queue') or not self._deferred_queue:
+            return
+        if self._ai_worker and self._ai_worker.isRunning():
+            # Retry in 2 seconds if AI is busy
+            QTimer.singleShot(2000, self._process_next_deferred)
+            return
+
+        item = self._deferred_queue.pop(0)
+        prompt = item.get("prompt", "")
+        rag = item.get("rag_context", "")
+        queued_at = item.get("queued_at", "")
+
+        log.info(f"[DEFER] Processing deferred prompt: '{prompt[:50]}...' (queued at {queued_at})")
+        self._chat_panel.start_generation(f"[Deferred] {prompt}")
+
+        self._ai_worker = AiWorker(self._ai, self._memory, self._logic, prompt)
+        self._ai_worker.token_streamed.connect(self._chat_panel.on_token)
+        self._ai_worker.generation_done.connect(self._on_deferred_done)
+        self._ai_worker.generation_error.connect(self._chat_panel.on_generation_error)
+        self._ai_worker.start()
+
+    def _on_deferred_done(self, result: dict):
+        """Handle completion of a deferred prompt."""
+        self._on_generation_done(result)
+        # Process next deferred item after a brief delay
+        if hasattr(self, '_deferred_queue') and self._deferred_queue:
+            QTimer.singleShot(500, self._process_next_deferred)
+
+    # ── Pipeline swap UI feedback ─────────────────────────────────────────────
+
+    def _on_swap_started(self, status: str):
+        """Called when a model swap begins. Disable input, show status."""
+        log.info(f"[UI] Swap started: {status}")
+        self._chat_panel.set_input_enabled(False)
+        self._chat_panel.on_generation_done({
+            "response": f"<span style='color:#f2a900'>⬡ {status}</span>"
+        })
+
+    def _on_swap_progress(self, status: str):
+        """Called with progress updates during swap."""
+        log.info(f"[UI] Swap progress: {status}")
+
+    def _on_swap_complete(self, device_str: str):
+        """Called when swap finishes successfully. Re-enable input."""
+        log.info(f"[UI] Swap complete: {device_str}")
+        self._chat_panel.set_input_enabled(True)
+        self._chat_panel.on_generation_done({
+            "response": f"<span style='color:#00ff88'>⬡ CORE TRANSFER COMPLETE</span><br>"
+                        f"Active: <b>{device_str}</b>"
+        })
+        # Update device info in left panel
+        try:
+            info = self._ai.get_device_info()
+            self._left_panel.update_device_info(info)
+        except Exception:
+            pass
+
+    def _on_swap_failed(self, error: str):
+        """Called when swap fails. Re-enable input, show error."""
+        log.error(f"[UI] Swap failed: {error}")
+        self._chat_panel.set_input_enabled(True)
+        self._chat_panel.on_generation_done({
+            "response": f"<span style='color:#ff4444'>⬡ CORE TRANSFER FAILED</span><br>"
+                        f"{error}"
+        })
 
     # ── Panel signals ─────────────────────────────────────────────────────────
 
