@@ -91,9 +91,10 @@ if ($vulkanAvailable) {
     Write-Host "  [2] Vulkan (Cross-platform. Works with Intel Arc and NVIDIA.)" -ForegroundColor Cyan
 }
 Write-Host "  [P] Pre-built (Install pre-compiled llama-cpp-python wheel for CUDA 12.x)" -ForegroundColor Magenta
+Write-Host "  [M] MTP Build (Build from latest llama.cpp master - REQUIRED for Qwen 3.6 MTP models)" -ForegroundColor Yellow
 Write-Host "  [S] Skip   (Only use NPU/OpenVINO models)" -ForegroundColor Gray
 
-$gpuChoice = Read-Host "`nSelect GPU backend (1/2/P/S)"
+$gpuChoice = Read-Host "`nSelect GPU backend (1/2/P/M/S)"
 
 if ($gpuChoice -eq "1" -and $cudaAvailable) {
     Write-Host "`n[*] Compiling llama-cpp-python with CUDA + Flash Attention..." -ForegroundColor Cyan
@@ -131,8 +132,99 @@ if ($gpuChoice -eq "1" -and $cudaAvailable) {
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "`n[SUCCESS] Pre-built CUDA llama-cpp-python installed!" -ForegroundColor Green
+        Write-Host "[NOTE] Pre-built wheels may not support MTP models (Qwen 3.6). Use option [M] if needed." -ForegroundColor Yellow
     } else {
         Write-Host "`n[WARN] Pre-built install failed. Try option [1] to compile from source." -ForegroundColor Yellow
+    }
+} elseif ($gpuChoice -match "^[mM]") {
+    Write-Host "`n[*] Building llama-cpp-python from LATEST llama.cpp master (MTP/SSM support)..." -ForegroundColor Yellow
+    Write-Host "    This is REQUIRED for Qwen 3.6 MTP and other next-gen architectures." -ForegroundColor Gray
+    
+    $mtpChoice = Read-Host "`n    Which backend do you want to build MTP for? (C = CUDA / V = Vulkan)"
+    
+    if ($mtpChoice -match "^[cC]") {
+        # 1. Dynamically search for ANY installed CUDA version (e.g. v13.2, v12.6)
+        $cudaBase = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+        if (Test-Path $cudaBase) {
+            $latestCuda = Get-ChildItem $cudaBase -Directory | Sort-Object Name -Descending | Select-Object -First 1
+            if ($latestCuda) {
+                $cudaPath = Join-Path $latestCuda.FullName "bin"
+                if (Test-Path $cudaPath) {
+                    $env:Path = "$cudaPath;" + $env:Path
+                    $cudaAvailable = $true
+                    $env:CUDACXX = Join-Path $cudaPath "nvcc.exe"
+                }
+            }
+        }
+
+        # 2. If it is STILL not available, install via winget
+        if (-not $cudaAvailable) {
+            Write-Host "`n[!] CUDA Toolkit not found. Auto-installing CUDA 12.6 via winget..." -ForegroundColor Cyan
+            winget install Nvidia.CUDA --version 12.6 --accept-package-agreements --accept-source-agreements
+            
+            Write-Host "    Refreshing environment variables..." -ForegroundColor Gray
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+            $fallbackPath = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin"
+            if (Test-Path $fallbackPath) { 
+                $env:Path = "$fallbackPath;" + $env:Path 
+                $env:CUDACXX = Join-Path $fallbackPath "nvcc.exe"
+            }
+        }
+        Write-Host "    -> Compiling with CUDA Toolkit..." -ForegroundColor Cyan
+        $env:CMAKE_ARGS = "-DGGML_CUDA=on -DGGML_CUDA_FA_ALL_QUANTS=on"
+    } elseif ($mtpChoice -match "^[vV]") {
+        if (-not $vulkanAvailable) {
+            Write-Host "`n[!] Vulkan SDK not found. Auto-installing via winget..." -ForegroundColor Cyan
+            winget install LunarG.VulkanSDK --accept-package-agreements --accept-source-agreements
+            
+            # Refresh environment variables
+            Write-Host "    Refreshing environment variables..." -ForegroundColor Gray
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+            $env:VULKAN_SDK = [System.Environment]::GetEnvironmentVariable("VULKAN_SDK","Machine")
+        }
+        Write-Host "    -> Compiling with Vulkan SDK..." -ForegroundColor Cyan
+        $env:CMAKE_ARGS = "-DGGML_VULKAN=on"
+    } else {
+        Write-Host "    -> Compiling CPU-only..." -ForegroundColor Yellow
+        $env:CMAKE_ARGS = ""
+    }
+
+    # VS Build Tools check
+    $vsPath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+    if (!(Test-Path $vsPath)) {
+        Write-Host "[!] VS Build Tools not found. Attempting to install via winget..."
+        winget install Microsoft.VisualStudio.2022.BuildTools --force --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools" --accept-package-agreements --accept-source-agreements
+    }
+
+    # Install Ninja to bypass MSVC CUDA integration issues
+    Write-Host "    -> Installing Ninja build system..." -ForegroundColor Gray
+    .\.venv\Scripts\python.exe -m pip install ninja
+
+    # Uninstall existing version first
+    .\.venv\Scripts\python.exe -m pip uninstall llama-cpp-python -y 2>$null
+
+    # Build from source against latest llama.cpp inside MSVC environment
+    Write-Host "    -> Initializing MSVC Environment..." -ForegroundColor Gray
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    $vsInstallPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    $vcvars = "$vsInstallPath\VC\Auxiliary\Build\vcvars64.bat"
+    
+    $env:FORCE_CMAKE = "1"
+    $env:CMAKE_GENERATOR = "Ninja"
+    
+    if (Test-Path $vcvars) {
+        Write-Host "    -> Launching Ninja build process..." -ForegroundColor Cyan
+        cmd.exe /c "`"$vcvars`" && .\.venv\Scripts\python.exe -m pip install llama-cpp-python --upgrade --force-reinstall --no-cache-dir --no-binary llama-cpp-python"
+    } else {
+        Write-Host "[!] Could not find vcvars64.bat at $vcvars. Attempting direct build..." -ForegroundColor Yellow
+        .\.venv\Scripts\python.exe -m pip install llama-cpp-python --upgrade --force-reinstall --no-cache-dir --no-binary llama-cpp-python
+    }
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "`n[SUCCESS] Latest llama-cpp-python built with MTP support!" -ForegroundColor Green
+    } else {
+        Write-Host "`n[WARN] Build failed. You may still need to restart your terminal if the CUDA/Vulkan install didn't fully register." -ForegroundColor Yellow
+        Write-Host "       If it fails again after a restart, try: pip install llama-cpp-python --pre --force-reinstall" -ForegroundColor Gray
     }
 } else {
     Write-Host "`n[*] Skipping GPU Engine. OpenVINO (NPU) models will function as the primary backend." -ForegroundColor Cyan

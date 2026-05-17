@@ -149,7 +149,7 @@ class MemoryManager:
     def get_dossier_html(self) -> str:
         """
         Build codex-style HTML dossier with categorized sections.
-        Each category gets a styled header with entry count and facts are shown as cards.
+        Uses only QTextBrowser-compatible HTML (no CSS display:inline, no <details>).
         """
         facts = self.get_all_facts()
         if not facts:
@@ -169,19 +169,16 @@ class MemoryManager:
                 categories[cat] = []
             categories[cat].append(f)
 
-        # Define display order and icons
-        cat_meta = {
-            "Preference": {"icon": "PREF", "color": "#00e5ff"},
-            "Preferences": {"icon": "PREF", "color": "#00e5ff"},
-            "Habit": {"icon": "HABIT", "color": "#f2a900"},
-            "Habits": {"icon": "HABIT", "color": "#f2a900"},
-            "Health": {"icon": "HEALTH", "color": "#00ff88"},
-            "Academic": {"icon": "ACAD", "color": "#bb86fc"},
-            "Work": {"icon": "WORK", "color": "#bb86fc"},
-            "Personal": {"icon": "PERS", "color": "#ff6b9d"},
-            "Schedule": {"icon": "SCHED", "color": "#f2a900"},
+        # Category metadata — color per type
+        cat_colors = {
+            "Preference": "#00e5ff", "Preferences": "#00e5ff",
+            "Habit": "#f2a900", "Habits": "#f2a900",
+            "Health": "#00ff88",
+            "Academic": "#bb86fc", "Work": "#bb86fc",
+            "Personal": "#ff6b9d",
+            "Schedule": "#f2a900",
         }
-        default_meta = {"icon": "DATA", "color": "#4a6075"}
+        default_color = "#4a6075"
 
         cat_order = [
             "Preference", "Preferences", "Health", "Academic", "Work",
@@ -192,46 +189,34 @@ class MemoryManager:
             key=lambda c: cat_order.index(c) if c in cat_order else 99
         )
 
-        html_parts = [
-            "<style>"
-            ".codex-section { margin-bottom: 8px; }"
-            ".codex-hdr { padding: 4px 8px; margin: 0; font-family: Orbitron, sans-serif; "
-            "font-size: 9px; font-weight: bold; letter-spacing: 2px; "
-            "border-bottom: 1px solid #0a2a44; }"
-            ".codex-badge { display: inline; padding: 1px 6px; border-radius: 3px; "
-            "font-size: 8px; letter-spacing: 1px; margin-right: 6px; }"
-            ".codex-entry { padding: 5px 10px; border-left: 2px solid #0a2a44; "
-            "margin: 2px 0 2px 4px; font-family: Montserrat, sans-serif; font-size: 11px; "
-            "color: #c8ddf0; }"
-            ".codex-ts { font-size: 8px; color: #4a6075; margin-top: 1px; }"
-            "</style>"
-        ]
-
+        html_parts = []
         for cat in sorted_cats:
-            meta = cat_meta.get(cat, default_meta)
+            color = cat_colors.get(cat, default_color)
             cat_facts = categories[cat]
             count = len(cat_facts)
-            color = meta["color"]
 
+            # Category header — simple colored text with underline
             html_parts.append(
-                f"<div class='codex-section'>"
-                f"<div class='codex-hdr' style='color:{color};'>"
-                f"<span class='codex-badge' style='background:rgba(0,0,0,0.3); "
-                f"color:{color}; border:1px solid {color};'>{meta['icon']}</span>"
-                f"{cat.upper()} ({count})</div>"
+                f"<p style='margin:8px 0 2px 0; padding:2px 6px; "
+                f"font-family: Orbitron, sans-serif; font-size:9px; font-weight:bold; "
+                f"letter-spacing:2px; color:{color}; "
+                f"border-bottom:1px solid #0a2a44;'>"
+                f"{cat.upper()} ({count})</p>"
             )
 
+            # Entries — indented with left accent
             for f in cat_facts:
                 ts = f.get('timestamp', '')
                 if ts and len(ts) > 10:
-                    ts = ts[:10]  # Just the date
+                    ts = ts[:10]
                 html_parts.append(
-                    f"<div class='codex-entry' style='border-left-color:{color};'>"
+                    f"<p style='margin:1px 0 1px 8px; padding:3px 6px; "
+                    f"border-left:2px solid {color}; "
+                    f"font-family: Montserrat, sans-serif; font-size:11px; "
+                    f"color:#c8ddf0;'>"
                     f"{f['fact']}"
-                    f"<div class='codex-ts'>{ts}</div>"
-                    f"</div>"
+                    f"<br><span style='font-size:8px; color:#4a6075;'>{ts}</span>"
+                    f"</p>"
                 )
-
-            html_parts.append("</div>")
 
         return "".join(html_parts)

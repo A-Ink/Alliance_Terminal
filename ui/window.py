@@ -15,6 +15,7 @@ from .panels import LeftPanel, ChatPanel, RightPanel
 from .boot_overlay import BootOverlay
 from .workers import AiWorker, DiagnosticsWorker, ReminderWorker, BootWorker
 from .dialogs import ModelSwitcherDialog, DeviceToggleDialog, HelpDialog
+from .calendar_dialog import CalendarDialog
 
 import logging
 from fast_path import try_fast_path
@@ -322,6 +323,7 @@ class AllianceTerminal(QWidget):
         self._left_panel.task_delete.connect(self._on_task_delete)
         self._left_panel.reminder_dismiss.connect(self._on_reminder_dismiss)
         self._chat_panel.message_sent.connect(self._on_message_sent)
+        self._right_panel.calendar_requested.connect(self._open_calendar)
 
         # ── Wire orchestrator signals for live swap feedback ──
         if self._orchestrator:
@@ -643,7 +645,7 @@ class AllianceTerminal(QWidget):
         })
 
     def _run_schedule_sanity_check(self):
-        """Run schedule sanity validation and trigger AI prompt if anomalies found."""
+        """Run schedule sanity validation, then clean up expired items."""
         try:
             from datetime import date
             warnings = self._logic.validate_schedule_sanity(date.today().isoformat())
@@ -661,6 +663,53 @@ class AllianceTerminal(QWidget):
                 log.info("[SANITY] Schedule passed sanity check — no anomalies.")
         except Exception as e:
             log.warning(f"[SANITY] Sanity check failed: {e}")
+
+        # ── Run expired item cleanup after sanity check ──
+        QTimer.singleShot(8000, self._run_expired_cleanup)
+
+    def _run_expired_cleanup(self):
+        """Clean up expired reminders and completed tasks, then ask AI about important ones."""
+        try:
+            result = self._logic.cleanup_expired_items()
+
+            # Log auto-removed items
+            auto_r = result.get("auto_removed_reminders", [])
+            auto_t = result.get("auto_removed_tasks", [])
+            ask_r  = result.get("ask_user_reminders", [])
+
+            if auto_r:
+                log.info(f"[CLEANUP] Auto-removed {len(auto_r)} expired reminder(s)")
+            if auto_t:
+                log.info(f"[CLEANUP] Auto-removed {len(auto_t)} completed task(s)")
+                self._refresh_tasks()
+
+            # If there are important expired reminders, ask the AI to check with the user
+            if ask_r:
+                items_text = ", ".join(f"'{r}'" for r in ask_r[:5])
+                prompt = (
+                    f"[SYSTEM PROACTIVE TASK: The following reminders have expired and need "
+                    f"the Commander's attention. Ask if they completed these or if they should "
+                    f"be rescheduled or dismissed: {items_text}]"
+                )
+                QTimer.singleShot(2000, lambda: self._trigger_proactive_ai(prompt))
+
+            # Refresh UI if anything changed
+            if auto_r or auto_t:
+                self._refresh_reminders()
+
+        except Exception as e:
+            log.warning(f"[CLEANUP] Expired item cleanup failed: {e}")
+
+    # ── Calendar popup ────────────────────────────────────────────────────────
+
+    def _open_calendar(self):
+        """Open the 7-day week view calendar popup."""
+        try:
+            week_data = self._logic.get_week_schedule()
+            dlg = CalendarDialog(week_data, parent=self)
+            dlg.exec()
+        except Exception as e:
+            log.warning(f"[CALENDAR] Failed to open calendar: {e}")
 
     # ── Panel signals ─────────────────────────────────────────────────────────
 

@@ -15,20 +15,35 @@ import sys
 import os
 from pathlib import Path
 
-# ── CUDA 12 DLL Registration (MUST happen before any llama_cpp import) ──────
-# The pre-compiled cu124 llama-cpp-python wheel needs cublas, cusparse, etc.
-# These are installed via pip (nvidia-cublas-cu12, etc.) into site-packages/nvidia/.
-# We prepend their bin dirs to PATH so Windows finds them at DLL load time.
+# ── CUDA DLL Registration (MUST happen before any llama_cpp import) ──────────
+# llama.dll links against cudart64_*.dll, cublas64_*.dll, etc.
+# These may live in:
+#   1. pip-installed nvidia packages (site-packages/nvidia/*/bin/)
+#   2. System CUDA Toolkit  (C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\vX.Y\bin\ or bin\x64\)
+# We prepend all discovered paths to PATH so Windows can resolve them at DLL load time.
 if sys.platform == "win32":
+    _cuda_paths = []
+
+    # Source 1: pip-installed nvidia packages
     _nvidia_dir = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
     if _nvidia_dir.exists():
-        _cuda_paths = []
         for _pkg in _nvidia_dir.iterdir():
             _bin = _pkg / "bin"
             if _bin.is_dir():
                 _cuda_paths.append(str(_bin))
-        if _cuda_paths:
-            os.environ["PATH"] = os.pathsep.join(_cuda_paths) + os.pathsep + os.environ.get("PATH", "")
+
+    # Source 2: System CUDA Toolkit (scan all installed versions, newest first)
+    _cuda_base = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA")
+    if _cuda_base.exists():
+        for _ver_dir in sorted(_cuda_base.iterdir(), reverse=True):
+            if _ver_dir.is_dir():
+                # CUDA 13.x puts DLLs in bin\x64\, older versions put them in bin\
+                for _sub in [_ver_dir / "bin" / "x64", _ver_dir / "bin"]:
+                    if _sub.is_dir():
+                        _cuda_paths.append(str(_sub))
+
+    if _cuda_paths:
+        os.environ["PATH"] = os.pathsep.join(_cuda_paths) + os.pathsep + os.environ.get("PATH", "")
 
 import logging
 import json

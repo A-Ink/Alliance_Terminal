@@ -1829,11 +1829,12 @@ class LogicEngine:
 
     def mark_task_complete(self, task_id: str):
         """Mark a task complete by ID (called from UI checkbox)."""
-        from datetime import date
+        from datetime import date, datetime
         target_name = None
         for t in self.tasks_db:
             if t.get("id") == task_id:
                 t["completed"] = True
+                t["completed_at"] = datetime.now().isoformat()
                 target_name = t.get("name")
                 log.info(f"Task {task_id} marked complete via UI")
                 break
@@ -1943,6 +1944,90 @@ class LogicEngine:
     def get_reminders_json(self) -> list:
         """Return active (non-dismissed) reminders for UI."""
         return [r for r in self.reminders_db if not r.get("dismissed")]
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # EXPIRED ITEM CLEANUP — Runs after sanity checks
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # Transient reminder keywords — these are auto-removable after expiry
+    _TRANSIENT_KEYWORDS = [
+        "take", "drink", "eat", "call", "check", "pick up", "submit",
+        "charge", "pack", "bring", "buy", "pay", "send", "text", "reply",
+    ]
+
+    def cleanup_expired_items(self) -> dict:
+        """
+        Clean up expired reminders and completed tasks.
+
+        Returns a dict with:
+          - 'auto_removed_reminders': list of auto-removed transient reminders
+          - 'ask_user_reminders': list of important reminders that need user confirmation
+          - 'auto_removed_tasks': list of auto-removed completed tasks
+        """
+        from datetime import date as _date, datetime as _dt, timedelta as _td
+        today = _date.today()
+        now = _dt.now()
+        result = {
+            "auto_removed_reminders": [],
+            "ask_user_reminders": [],
+            "auto_removed_tasks": [],
+        }
+
+        # ── 1. Expired Reminders ──
+        active_reminders = [r for r in self.reminders_db if not r.get("dismissed")]
+        for r in active_reminders:
+            r_date_str = r.get("date", "")
+            if not r_date_str:
+                continue
+            try:
+                r_date = _date.fromisoformat(r_date_str)
+            except (ValueError, TypeError):
+                continue
+
+            if r_date >= today:
+                continue  # Not expired yet
+
+            text = (r.get("text") or r.get("reminder_text", "")).lower()
+
+            # Check if this is a transient reminder (auto-removable)
+            is_transient = any(kw in text for kw in self._TRANSIENT_KEYWORDS)
+
+            if is_transient:
+                r["dismissed"] = True
+                result["auto_removed_reminders"].append(r.get("text", r.get("reminder_text", "")))
+                log.info(f"[CLEANUP] Auto-removed transient reminder: '{text}'")
+            else:
+                # Important reminder — queue for AI to ask user
+                result["ask_user_reminders"].append(r.get("text", r.get("reminder_text", "")))
+
+        # ── 2. Completed Tasks (older than 24 hours) ──
+        for t in list(self.tasks_db):
+            if not t.get("completed"):
+                continue
+
+            # Check completion timestamp if available, otherwise check creation
+            completed_at = t.get("completed_at")
+            created_at = t.get("created_at")
+            ref_time = completed_at or created_at
+
+            if ref_time:
+                try:
+                    ref_dt = _dt.fromisoformat(ref_time)
+                    if (now - ref_dt) < _td(hours=24):
+                        continue  # Too recent, keep it visible
+                except (ValueError, TypeError):
+                    pass
+
+            # Remove completed task
+            task_name = t.get("name", "Unknown")
+            self.tasks_db.remove(t)
+            result["auto_removed_tasks"].append(task_name)
+            log.info(f"[CLEANUP] Auto-removed completed task: '{task_name}'")
+
+        if result["auto_removed_reminders"] or result["auto_removed_tasks"]:
+            self._save_state()
+
+        return result
 
     # ═══════════════════════════════════════════════════════════════════════
     # NEW: SLEEP/WAKE UPDATE HANDLER
@@ -2111,6 +2196,174 @@ class LogicEngine:
                     enriched.append(free_block)
 
         return enriched
+
+    def get_week_schedule(self) -> dict:
+        """
+        Returns 7 days of schedule data: 2 past + today + 4 future.
+        Each day includes default biological anchors and free-time gaps.
+
+        Returns:
+            {date_str: [event_dicts]} where each event has:
+                activity, start_time, duration, priority, type
+        """
+        from datetime import datetime as _dt, date as _date, timedelta as _td
+
+        today = _date.today()
+        days = [today + _td(days=i) for i in range(-2, 5)]  # 7 days
+
+        # --- Estimate typical wake/sleep from recent data ---
+        def _get_anchor_time(date_str: str, keyword: str) -> str | None:
+            for ev in self.schedule_db.get(date_str, []):
+                if keyword in ev.get("activity", "").lower():
+                    return ev.get("start_time")
+            return None
+
+        # Scan last 7 days for typical wake/sleep times
+        wake_samples, sleep_samples = [], []
+        for i in range(-7, 1):
+            d = (today + _td(days=i)).isoformat()
+            w = _get_anchor_time(d, "wake")
+            s = _get_anchor_time(d, "sleep")
+            if w:
+                wake_samples.append(w)
+            if s:
+                sleep_samples.append(s)
+
+        def _avg_time(samples: list, fallback: str, min_hour: int = 0, max_hour: int = 23) -> str:
+            """Average HH:MM samples, filtering outliers outside [min_hour, max_hour]."""
+            if not samples:
+                return fallback
+            valid = []
+            for s in samples:
+                try:
+                    h, m = map(int, s.split(":"))
+                    if min_hour <= h <= max_hour:
+                        valid.append(h * 60 + m)
+                except (ValueError, AttributeError):
+                    pass
+            if not valid:
+                return fallback
+            avg = sum(valid) // len(valid)
+            return f"{avg // 60:02d}:{avg % 60:02d}"
+
+        # Filter: wake should be 5-12, sleep should be 21-03
+        default_wake  = _avg_time(wake_samples, "07:00", min_hour=5, max_hour=12)
+        default_sleep = _avg_time(sleep_samples, "23:00", min_hour=21, max_hour=23)
+
+        # --- Build each day ---
+        result = {}
+        for day in days:
+            day_str = day.isoformat()
+            raw_events = list(self.schedule_db.get(day_str, []))
+
+            # Get this day's actual wake/sleep or use defaults
+            day_wake  = _get_anchor_time(day_str, "wake") or default_wake
+            day_sleep = _get_anchor_time(day_str, "sleep") or default_sleep
+
+            # --- Inject default biological anchors if missing ---
+            has_wake  = any("wake" in e.get("activity", "").lower() for e in raw_events)
+            has_sleep = any("sleep" in e.get("activity", "").lower() for e in raw_events)
+            has_breakfast = any("breakfast" in e.get("activity", "").lower() for e in raw_events)
+            has_lunch = any("lunch" in e.get("activity", "").lower() for e in raw_events)
+            has_dinner = any("dinner" in e.get("activity", "").lower() for e in raw_events)
+
+            if not has_wake:
+                raw_events.append({
+                    "start_time": day_wake, "duration": 15,
+                    "activity": "Wake", "priority": 8,
+                    "type": "biological", "projected": True
+                })
+
+            if not has_breakfast:
+                # Breakfast 45min after wake
+                try:
+                    wh, wm = map(int, day_wake.split(":"))
+                    bm = wh * 60 + wm + 45
+                    b_time = f"{bm // 60:02d}:{bm % 60:02d}"
+                except (ValueError, AttributeError):
+                    b_time = "08:00"
+                raw_events.append({
+                    "start_time": b_time, "duration": 30,
+                    "activity": "Breakfast", "priority": 7,
+                    "type": "meal", "projected": True
+                })
+
+            if not has_lunch:
+                raw_events.append({
+                    "start_time": "12:30", "duration": 45,
+                    "activity": "Lunch", "priority": 7,
+                    "type": "meal", "projected": True
+                })
+
+            if not has_dinner:
+                raw_events.append({
+                    "start_time": "20:00", "duration": 45,
+                    "activity": "Dinner", "priority": 7,
+                    "type": "meal", "projected": True
+                })
+
+            if not has_sleep:
+                raw_events.append({
+                    "start_time": day_sleep, "duration": 420,
+                    "activity": "Sleep", "priority": 9,
+                    "type": "sleep", "projected": True
+                })
+
+            # --- Sort by start_time ---
+            def _sort_key(ev):
+                try:
+                    h, m = map(int, ev["start_time"].split(":"))
+                    return h * 60 + m
+                except (ValueError, KeyError):
+                    return 9999
+
+            raw_events.sort(key=_sort_key)
+
+            # --- Filter to wake–sleep window ---
+            try:
+                wake_m  = int(day_wake.split(":")[0]) * 60 + int(day_wake.split(":")[1])
+                sleep_m = int(day_sleep.split(":")[0]) * 60 + int(day_sleep.split(":")[1])
+            except (ValueError, AttributeError):
+                wake_m, sleep_m = 420, 1380  # 7:00–23:00
+
+            filtered = []
+            for ev in raw_events:
+                try:
+                    h, m = map(int, ev["start_time"].split(":"))
+                    ev_m = h * 60 + m
+                except (ValueError, KeyError):
+                    continue
+                # Include events in the wake–sleep window (or sleep itself)
+                if ev_m >= wake_m or ev.get("type") == "sleep":
+                    filtered.append(ev)
+
+            # --- Inject free-time gaps ---
+            MIN_GAP = 15  # Only show gaps >= 15 minutes
+            enriched = []
+            for i, ev in enumerate(filtered):
+                enriched.append(ev)
+                if i < len(filtered) - 1:
+                    try:
+                        h1, m1 = map(int, ev["start_time"].split(":"))
+                        end_m = h1 * 60 + m1 + ev.get("duration", 0)
+                        h2, m2 = map(int, filtered[i + 1]["start_time"].split(":"))
+                        next_m = h2 * 60 + m2
+                        gap = next_m - end_m
+                        if gap >= MIN_GAP:
+                            gap_h, gap_min = end_m // 60, end_m % 60
+                            enriched.append({
+                                "start_time": f"{gap_h:02d}:{gap_min:02d}",
+                                "duration": gap,
+                                "activity": "",
+                                "type": "free",
+                                "priority": 0,
+                            })
+                    except (ValueError, KeyError):
+                        pass
+
+            result[day_str] = enriched
+
+        return result
 
 # --- MODULE TEST / USAGE EXAMPLES ---
 if __name__ == "__main__":

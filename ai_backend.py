@@ -442,9 +442,20 @@ class AIBackend:
                 log.info(f"[SUCCESS] Llama.cpp pipeline established: "
                          f"{n_gpu_layers} layers offloaded, flash_attn={use_flash_attn}")
             except Exception as e:
-                log.error(f"[FATAL] Llama.cpp initialization failed: {e}")
+                error_msg = str(e)
+                log.error(f"[FATAL] Llama.cpp initialization failed: {error_msg}")
                 import traceback
                 log.error(traceback.format_exc())
+                # Provide actionable guidance for common failures
+                if "missing tensor" in error_msg or "ssm_conv1d" in error_msg:
+                    log.error(
+                        "[HINT] This model uses an architecture (MTP/SSM) not supported by your "
+                        f"llama-cpp-python version. Rebuild from source with the latest llama.cpp, "
+                        f"or use a non-MTP model variant."
+                    )
+                elif "not found" in error_msg.lower() or "no such file" in error_msg.lower():
+                    log.error(f"[HINT] Model file not found at: {self.model_path}")
+                self._load_error_msg = error_msg
 
     @staticmethod
     def _estimate_prompt_tokens(text: str) -> int:
@@ -635,9 +646,8 @@ class AIBackend:
                         {"role": "user", "content": user_message}
                     ]
 
-                    # Detect thinking-capable models
-                    model_key = (self.model_info.get("display_name", "") or "").lower()
-                    is_thinking_model = any(k in model_key for k in ["qwen 3", "qwen3", "gemma 4", "gemma-4"])
+                    # Config-driven thinking toggle (defaults to False)
+                    is_thinking_model = bool(self.model_info.get("enable_thinking", False))
 
                     response = self.pipe.create_chat_completion(
                         messages=messages,

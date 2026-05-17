@@ -393,16 +393,6 @@
   "user_energy": 78,
   "tasks": [
     {
-      "id": "003c052e",
-      "name": "Computing 1d Project",
-      "duration": 90,
-      "priority": 7,
-      "deadline": "2026-03-29",
-      "completed": true,
-      "auto_schedule": true,
-      "date": "2026-03-29"
-    },
-    {
       "id": "ac13f136",
       "name": "Auto-Recovered Floating Task",
       "duration": 60,
@@ -420,7 +410,7 @@
       "reminder_text": "Update CCA records",
       "remind_at": "14:30",
       "date": "2026-03-29",
-      "dismissed": false
+      "dismissed": true
     },
     {
       "id": "3c4c719d",
@@ -428,7 +418,7 @@
       "reminder_text": "Take breaks while gaming",
       "remind_at": "15:30",
       "date": "2026-03-29",
-      "dismissed": false
+      "dismissed": true
     },
     {
       "id": "57d7466c",

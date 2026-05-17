@@ -491,6 +491,8 @@ class ChatPanel(QWidget):
 # ══════════════════════════════════════════════════════════════════════════════
 
 class RightPanel(QWidget):
+    calendar_requested = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(220)
@@ -550,10 +552,33 @@ class RightPanel(QWidget):
         sc_lay.setContentsMargins(8, 8, 8, 8)
         sc_lay.setSpacing(4)
 
+        # Header row with WEEK VIEW button
+        sched_hdr_row = QHBoxLayout()
         sched_hdr = QLabel("OPERATIONS TIMELINE")
         sched_hdr.setFont(font_orbitron(7, QFont.Weight.Bold))
         sched_hdr.setStyleSheet(f"color: {C_CYAN_DIM}; letter-spacing: 2px; background: transparent;")
-        sc_lay.addWidget(sched_hdr)
+        sched_hdr_row.addWidget(sched_hdr)
+        sched_hdr_row.addStretch()
+
+        self._week_btn = QPushButton("WEEK VIEW")
+        self._week_btn.setFont(font_orbitron(6))
+        self._week_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._week_btn.setFixedHeight(20)
+        self._week_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; color: {C_CYAN_DIM};
+                border: 1px solid {C_BORDER}; border-radius: 3px;
+                padding: 2px 8px; letter-spacing: 1px;
+            }}
+            QPushButton:hover {{
+                color: {C_CYAN}; border-color: {C_BORDER_LIT};
+                background: rgba(0,229,255,0.08);
+            }}
+        """)
+        self._week_btn.clicked.connect(self.calendar_requested.emit)
+        sched_hdr_row.addWidget(self._week_btn)
+
+        sc_lay.addLayout(sched_hdr_row)
 
         self._sched_inner = QWidget()
         self._sched_inner.setStyleSheet("background: transparent;")
