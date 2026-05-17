@@ -634,7 +634,11 @@ class AIBackend:
                         {"role": "system", "content": self.system_prompt + context_block},
                         {"role": "user", "content": user_message}
                     ]
-                    
+
+                    # Detect thinking-capable models
+                    model_key = (self.model_info.get("display_name", "") or "").lower()
+                    is_thinking_model = any(k in model_key for k in ["qwen 3", "qwen3", "gemma 4", "gemma-4"])
+
                     response = self.pipe.create_chat_completion(
                         messages=messages,
                         stream=True,
@@ -647,9 +651,10 @@ class AIBackend:
                         repeat_penalty=repeat_penalty,
                         logit_bias=logit_bias
                     )
-                    
+
+                    # Track thinking state so we don't stream <think> to the UI
+                    in_thinking = False
                     for chunk in response:
-                        # Check abort event every token for graceful mid-generation halt
                         if self._abort_event.is_set():
                             log.info("[ABORT] Generation aborted via abort event (Llama.cpp chunk loop).")
                             break
@@ -657,11 +662,28 @@ class AIBackend:
                         if 'content' in delta:
                             token = delta['content']
                             raw_text += token
-                            if stream_callback: stream_callback(token)
-                            
+
+                            # Suppress thinking tokens from UI stream
+                            if is_thinking_model:
+                                if '<think>' in token:
+                                    in_thinking = True
+                                    continue
+                                if '</think>' in token:
+                                    in_thinking = False
+                                    continue
+                                if in_thinking:
+                                    continue
+
+                            if stream_callback:
+                                stream_callback(token)
+
             except Exception as e:
                 log.error(f"Generation aborted: {e}")
                 return f"[CRITICAL FAILURE] {e}", [], [], [], [], None, False
+
+            # Strip <think> blocks before post-processing
+            import re
+            raw_text = re.sub(r'<think>.*?</think>', '', raw_text, flags=re.DOTALL).strip()
 
             log.info("Generation complete. Parsing outputs...")
             res = self._post_process(raw_text)

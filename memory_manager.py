@@ -148,13 +148,14 @@ class MemoryManager:
 
     def get_dossier_html(self) -> str:
         """
-        Build codex-style HTML dossier with expandable category sections.
-        Uses <details>/<summary> for collapsible groups.
+        Build codex-style HTML dossier with categorized sections.
+        Each category gets a styled header with entry count and facts are shown as cards.
         """
         facts = self.get_all_facts()
         if not facts:
             return (
-                "<div class='codex-empty'>"
+                "<div style='text-align:center; padding:24px; color:#4a6075; "
+                "font-family: Montserrat, sans-serif; font-size:11px;'>"
                 "No intelligence gathered yet.<br>"
                 "Share your preferences and I will build your codex."
                 "</div>"
@@ -168,34 +169,69 @@ class MemoryManager:
                 categories[cat] = []
             categories[cat].append(f)
 
-        # Define display order
+        # Define display order and icons
+        cat_meta = {
+            "Preference": {"icon": "PREF", "color": "#00e5ff"},
+            "Preferences": {"icon": "PREF", "color": "#00e5ff"},
+            "Habit": {"icon": "HABIT", "color": "#f2a900"},
+            "Habits": {"icon": "HABIT", "color": "#f2a900"},
+            "Health": {"icon": "HEALTH", "color": "#00ff88"},
+            "Academic": {"icon": "ACAD", "color": "#bb86fc"},
+            "Work": {"icon": "WORK", "color": "#bb86fc"},
+            "Personal": {"icon": "PERS", "color": "#ff6b9d"},
+            "Schedule": {"icon": "SCHED", "color": "#f2a900"},
+        }
+        default_meta = {"icon": "DATA", "color": "#4a6075"}
+
         cat_order = [
-            "Preferences", "Habits", "Health", "Work",
-            "Schedule", "Personal", DEFAULT_CATEGORY,
+            "Preference", "Preferences", "Health", "Academic", "Work",
+            "Habit", "Habits", "Personal", "Schedule",
         ]
         sorted_cats = sorted(
             categories.keys(),
             key=lambda c: cat_order.index(c) if c in cat_order else 99
         )
 
-        html_parts = []
+        html_parts = [
+            "<style>"
+            ".codex-section { margin-bottom: 8px; }"
+            ".codex-hdr { padding: 4px 8px; margin: 0; font-family: Orbitron, sans-serif; "
+            "font-size: 9px; font-weight: bold; letter-spacing: 2px; "
+            "border-bottom: 1px solid #0a2a44; }"
+            ".codex-badge { display: inline; padding: 1px 6px; border-radius: 3px; "
+            "font-size: 8px; letter-spacing: 1px; margin-right: 6px; }"
+            ".codex-entry { padding: 5px 10px; border-left: 2px solid #0a2a44; "
+            "margin: 2px 0 2px 4px; font-family: Montserrat, sans-serif; font-size: 11px; "
+            "color: #c8ddf0; }"
+            ".codex-ts { font-size: 8px; color: #4a6075; margin-top: 1px; }"
+            "</style>"
+        ]
+
         for cat in sorted_cats:
+            meta = cat_meta.get(cat, default_meta)
             cat_facts = categories[cat]
             count = len(cat_facts)
+            color = meta["color"]
 
             html_parts.append(
-                f"<details class='codex-section' open>"
-                f"<summary>{cat.upper()} ({count})</summary>"
+                f"<div class='codex-section'>"
+                f"<div class='codex-hdr' style='color:{color};'>"
+                f"<span class='codex-badge' style='background:rgba(0,0,0,0.3); "
+                f"color:{color}; border:1px solid {color};'>{meta['icon']}</span>"
+                f"{cat.upper()} ({count})</div>"
             )
 
             for f in cat_facts:
+                ts = f.get('timestamp', '')
+                if ts and len(ts) > 10:
+                    ts = ts[:10]  # Just the date
                 html_parts.append(
-                    f"<div class='codex-entry'>"
+                    f"<div class='codex-entry' style='border-left-color:{color};'>"
                     f"{f['fact']}"
-                    f"<div class='codex-entry-time'>{f['timestamp']}</div>"
+                    f"<div class='codex-ts'>{ts}</div>"
                     f"</div>"
                 )
 
-            html_parts.append("</details>")
+            html_parts.append("</div>")
 
         return "".join(html_parts)

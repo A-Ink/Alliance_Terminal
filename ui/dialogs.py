@@ -27,14 +27,15 @@ from .theme import (
 _CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _MODEL_DIR   = Path(__file__).parent.parent / "model"
 
-# ── Descriptions for each model (supplemental, since config.json is minimal) ──
+# -- Descriptions for each model (supplemental, since config.json is minimal) --
 _MODEL_DESCRIPTIONS = {
-    "qwen-2.5-7b":     "A well-rounded 7B general-purpose model. Excellent for scheduling, tasking, and day-to-day assist commands. Optimised for balanced speed and intelligence on Intel NPU.",
-    "qwen-3-8b":       "Upgraded reasoning core with improved chain-of-thought depth. Best for complex planning, multi-step analysis, and nuanced decision support. Slightly slower on first inference.",
-    "phi-4-mini":      "Lightweight speed core. Fastest response times, minimal VRAM footprint. Ideal for quick queries, reminders, and simple tasking when battery efficiency is critical.",
-    "mistral-7b":      "High-precision execution core tuned for precise, structured outputs. Optimal for technical questions and rigorous schedule management with minimal hallucination.",
-    "gemma-4-26b-gpu": "26B Mixture-of-Experts tactical core. Runs on dGPU via CUDA. Excellent reasoning and instruction following with efficient active parameter usage (~4B active per token).",
-    "qwen-3.6-27b-gpu": "27B dense heavy-duty core. Runs on dGPU via CUDA. Maximum reasoning depth for complex multi-step planning, scheduling logic, and nuanced analysis.",
+    "qwen-2.5-7b":      "A well-rounded 7B general-purpose model. Excellent for scheduling, tasking, and day-to-day assist commands. Optimised for balanced speed and intelligence on Intel NPU.",
+    "qwen-3-8b":        "Upgraded reasoning core with improved chain-of-thought depth. Best for complex planning, multi-step analysis, and nuanced decision support. Slightly slower on first inference.",
+    "phi-4-mini":       "Lightweight speed core. Fastest response times, minimal VRAM footprint. Ideal for quick queries, reminders, and simple tasking when battery efficiency is critical.",
+    "mistral-7b":       "High-precision execution core tuned for precise, structured outputs. Optimal for technical questions and rigorous schedule management with minimal hallucination.",
+    "gemma-4-26b-gpu":  "26B Mixture-of-Experts tactical core. Runs on dGPU via CUDA. Excellent reasoning and instruction following with efficient active parameter usage (~4B active per token). Supports thinking mode.",
+    "qwen-3.6-27b-gpu": "27B dense heavy-duty core with thinking mode. Runs on dGPU via CUDA. Maximum reasoning depth for complex multi-step planning, scheduling logic, and nuanced analysis.",
+    "gemma-4-e4b-gpu":  "Gemma 4 E4B speed core. Runs on dGPU via CUDA. Fast inference with strong instruction following. Supports thinking mode for improved accuracy on complex tasks.",
 }
 
 
@@ -101,11 +102,18 @@ class _BaseDialog(QDialog):
         t_lbl.setStyleSheet(f"color: {C_CYAN}; letter-spacing: 4px; background: transparent;")
         tb_lay.addWidget(t_lbl, 1)
 
-        close_btn = QPushButton("✕")
-        close_btn.setFixedSize(28, 28)
+        close_btn = QPushButton("X")
+        close_btn.setFixedSize(32, 28)
         close_btn.setStyleSheet(f"""
-            QPushButton {{ background: transparent; color: {C_TEXT_DIM}; border: none; font-size: 13px; }}
-            QPushButton:hover {{ color: {C_RED}; background: rgba(255,50,50,0.18); border-radius: 4px; }}
+            QPushButton {{
+                background: transparent; color: {C_TEXT}; border: none;
+                font-family: 'Segoe UI Symbol', {S_MONTSERRAT};
+                font-size: 12px; font-weight: bold;
+            }}
+            QPushButton:hover {{
+                color: white; background: rgba(255,50,50,0.35);
+                border-radius: 4px;
+            }}
         """)
         close_btn.clicked.connect(self.close)
         tb_lay.addWidget(close_btn)
@@ -163,7 +171,7 @@ class ModelSwitcherDialog(_BaseDialog):
     model_selected = pyqtSignal(str)  # emits model key when user clicks LOAD CORE
 
     def __init__(self, parent=None):
-        super().__init__("◈  TACTICAL CORE SELECTION", parent)
+        super().__init__("TACTICAL CORE SELECTION", parent)
         self.setMinimumWidth(640)
         self.setMinimumHeight(400)
 
@@ -261,7 +269,7 @@ class ModelSwitcherDialog(_BaseDialog):
         btn_col.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         if is_active:
-            status_lbl = QLabel("● ACTIVE")
+            status_lbl = QLabel("ACTIVE")
             status_lbl.setFont(font_orbitron(8, QFont.Weight.Bold))
             status_lbl.setStyleSheet(f"color: {C_GREEN}; letter-spacing: 2px; background: transparent;")
             status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -280,7 +288,7 @@ class ModelSwitcherDialog(_BaseDialog):
             btn_col.addWidget(load_btn)
 
         if not downloaded:
-            dl_btn = QPushButton("⬇  DOWNLOAD")
+            dl_btn = QPushButton("DOWNLOAD")
             dl_btn.setFixedWidth(110)
             dl_btn.setStyleSheet(f"""
                 QPushButton {{background: rgba(242,169,0,0.10); color: {C_GOLD};
@@ -291,7 +299,7 @@ class ModelSwitcherDialog(_BaseDialog):
             dl_btn.clicked.connect(lambda _, k=key, i=info: self._on_download(k, i))
             btn_col.addWidget(dl_btn)
         else:
-            avail_lbl = QLabel("✓ INSTALLED")
+            avail_lbl = QLabel("INSTALLED")
             avail_lbl.setFont(font_orbitron(7))
             avail_lbl.setStyleSheet(f"color: {C_GREEN}; letter-spacing: 1px; background: transparent;")
             avail_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -337,7 +345,7 @@ class DeviceToggleDialog(_BaseDialog):
     ]
 
     def __init__(self, parent=None):
-        super().__init__("⬡  SILICON TARGET SELECTION", parent)
+        super().__init__("SILICON TARGET SELECTION", parent)
         self.setFixedWidth(520)
 
         try:
@@ -409,7 +417,7 @@ class DeviceToggleDialog(_BaseDialog):
         row_lay.addLayout(text_col, 1)
 
         if is_active:
-            sel_lbl = QLabel("● SELECTED")
+            sel_lbl = QLabel("SELECTED")
             sel_lbl.setFont(font_orbitron(8, QFont.Weight.Bold))
             sel_lbl.setStyleSheet(f"color: {C_GREEN}; letter-spacing: 2px; background: transparent;")
             row_lay.addWidget(sel_lbl)
@@ -450,7 +458,7 @@ class HelpDialog(_BaseDialog):
     """Scrollable tactical manual covering all features, logic, and mathematics."""
 
     def __init__(self, parent=None):
-        super().__init__("?  TACTICAL MANUAL  ·  ALLIANCE TERMINAL V3", parent)
+        super().__init__("TACTICAL MANUAL", parent)
         self.setMinimumSize(700, 580)
         self.resize(740, 640)
 

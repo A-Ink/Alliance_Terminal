@@ -332,106 +332,169 @@ class LogicEngine:
 
     def _calculate_current_energy(self) -> Dict[str, Any]:
         """
-        Synthesizes the energy score (clamped 15-100) using a continuous circadian framework mapped to Anchors.
+        Synthesizes energy score (clamped 15-100) from biological factors.
+        ONLY considers PAST events — future schedule does not affect current fatigue.
+
+        Factors:
+          1. Circadian decay (time awake since wake anchor)
+          2. Sleep debt penalty (-5 per hour of deficit)
+          3. Sleep consistency (wake time variance over past 3 days)
+          4. Mental work drain (study, classes, exams, coding, socializing)
+          5. Recovery boosts (recreational activities, snacks, naps)
+          6. Post-lunch circadian dip (13:00-15:30)
+          7. Post-meal metabolic dip
         """
         now = datetime.now()
         today_str = now.date().isoformat()
-        
         day_tasks = self.schedule_db.get(today_str, [])
         now_m = now.hour * 60 + now.minute
         penalties = []
-        
-        # 1. Base Circadian Decay
+
+        # ── 1. Base Circadian Decay (time-since-wake) ──
         wake = next((t for t in day_tasks if "wake" in t.get('activity', '').lower()), None)
-        sleep = next((t for t in day_tasks if "sleep" in t.get('activity', '').lower()), None)
-        
+        sleep = next((t for t in day_tasks if t.get('type') == 'sleep'), None)
+
         wake_m = self._time_to_minutes(wake['start_time']) if wake else 420
         sleep_m = self._time_to_minutes(sleep['start_time']) if sleep else 1380
-        
-        if sleep_m <= wake_m: sleep_m += 1440 # Cross-midnight adjustment
+
+        if sleep_m <= wake_m:
+            sleep_m += 1440  # Cross-midnight
         total_awake = max(sleep_m - wake_m, 60)
-        
-        # Adjust now_m for past-midnight sleepers
+
         calc_now_m = now_m + 1440 if now_m < wake_m and now.hour < 5 else now_m
         current_awake = calc_now_m - wake_m
 
         if current_awake < 0:
-            score = 100
+            score = 100.0
         elif current_awake >= total_awake:
-            score = 15 # Exhausted floor cap
+            score = 15.0
         else:
-            # Linear decay from 100% to 15%
-            score = 100 - (current_awake / total_awake) * 85
-            
-        # 2. Sleep Debt Flat Penalty (-5 per hour of debt)
+            score = 100.0 - (current_awake / total_awake) * 85.0
+
+        # ── 2. Sleep Debt Penalty (-5 per hour of deficit) ──
         debt_mins = self._calculate_sleep_debt(today_str)
         if debt_mins > 0:
-            debt_penalty = int((debt_mins / 60) * 5)
+            debt_penalty = round((debt_mins / 60) * 5, 1)
             score -= debt_penalty
-            if debt_penalty > 0: penalties.append(f"Sleep Debt: -{debt_penalty}")
+            if debt_penalty > 0:
+                penalties.append(f"Sleep Debt: -{debt_penalty}")
 
-        # 3. Dynamic Cognitive/Social Drain
-        thinking_k = ["study", "exam", "code", "math", "logic", "analysis", "project", "writing", "research"]
-        social_k = ["meeting", "social", "party", "call", "lecture", "seminar", "class", "interview", "group"]
-        
-        drain = 0
+        # ── 3. Sleep Consistency (wake time variance over past 3 days) ──
+        from datetime import timedelta as _td
+        wake_times_m = []
+        for d_offset in range(0, 4):
+            d_str = (now.date() - _td(days=d_offset)).isoformat()
+            d_tasks = self.schedule_db.get(d_str, [])
+            w_ev = next((t for t in d_tasks if "wake" in t.get('activity', '').lower()), None)
+            if w_ev and "start_time" in w_ev:
+                wake_times_m.append(self._time_to_minutes(w_ev['start_time']))
+        if len(wake_times_m) >= 3:
+            avg_wake = sum(wake_times_m) / len(wake_times_m)
+            variance = sum(abs(w - avg_wake) for w in wake_times_m) / len(wake_times_m)
+            if variance > 90:  # > 1.5 hours average deviation
+                pen = min(15, round(variance / 10))
+                score -= pen
+                penalties.append(f"Irregular Sleep: -{pen}")
+
+        # ── Activity classification keywords ──
+        DRAIN_KEYWORDS = [
+            "study", "exam", "code", "coding", "math", "logic", "analysis",
+            "project", "writing", "research", "lecture", "seminar", "class",
+            "tutorial", "lab", "assignment", "homework", "revision",
+            "meeting", "interview", "presentation", "social", "call",
+            "group", "discussion", "conference",
+        ]
+        RECOVERY_KEYWORDS = [
+            "game", "gaming", "play", "read", "reading", "book", "music",
+            "listen", "walk", "exercise", "workout", "yoga", "meditat",
+            "relax", "break", "rest", "tv", "watch", "movie", "netflix",
+            "youtube", "chill", "hobby",
+        ]
+
+        # ── 4. Mental Work Drain (ONLY past/completed activities) ──
+        drain = 0.0
         for t in day_tasks:
-            if "start_time" not in t: continue
+            if "start_time" not in t:
+                continue
             st = self._time_to_minutes(t['start_time'])
-            if st < now_m:
-                activity = t['activity'].lower()
-                if any(k in activity for k in thinking_k + social_k):
-                    # Faster drain for intense tasks (-15 per hour)
-                    task_drain = int((t['duration'] / 60) * 15)
-                    drain += task_drain
-                    
+            end_m = st + t.get('duration', 0)
+            # Only count tasks that have STARTED (not future ones)
+            if st >= now_m:
+                continue
+            # Calculate actual elapsed time (not full duration if still ongoing)
+            actual_duration = min(t.get('duration', 0), now_m - st)
+            activity = t.get('activity', '').lower()
+            if any(k in activity for k in DRAIN_KEYWORDS):
+                task_drain = round((actual_duration / 60) * 12, 1)
+                drain += task_drain
+
         if drain > 0:
             score -= drain
-            penalties.append(f"Intellectual Limit: -{drain}")
+            penalties.append(f"Mental Load: -{drain}")
 
-        # 4. Metabolic Cycles (Thermic Effect & Food Comas)
+        # ── 5. Recovery Boosts (ONLY past/completed activities) ──
+        recovery = 0.0
         for t in day_tasks:
-            if t.get('type') == "meal":
-                act = t['activity'].lower()
-                meal_start = self._time_to_minutes(t['start_time'])
-                meal_end = meal_start + t['duration']
-                
-                if "lunch" in act and meal_end <= now_m < meal_end + 120:
-                    score -= 20
-                    penalties.append("Food Coma (Lunch): -20")
-                elif "dinner" in act and meal_end <= now_m < meal_end + 90:
-                    score -= 10
-                    penalties.append("Food Coma (Dinner): -10")
-        
-        # 5. Environmental modifiers
-        if 840 <= now_m <= 960: # 14:00 - 16:00
-            score -= 10
-            penalties.append("Afternoon Heat Shift: -10")
-            
-        # 6. Recovery Boosts (Completed Tasks)
-        for t in day_tasks:
-            if "start_time" not in t: continue
+            if "start_time" not in t:
+                continue
             st = self._time_to_minutes(t['start_time'])
-            if st + t['duration'] <= now_m:
-                act = t['activity'].lower()
-                if "snack" in act:
-                    score += 15
-                    penalties.append("Glucose Recovery: +15")
-                elif "powernap" in act:
-                    score += 30
-                    penalties.append("Powernap Flush: +30")
+            end_m = st + t.get('duration', 0)
+            # Only count completed recreational blocks
+            if end_m > now_m:
+                continue
+            activity = t.get('activity', '').lower()
+            if any(k in activity for k in RECOVERY_KEYWORDS):
+                boost = round((t.get('duration', 0) / 60) * 8, 1)
+                recovery += boost
+            elif "snack" in activity:
+                recovery += 12
+            elif "powernap" in activity or "nap" in activity:
+                recovery += 25
 
-        # Clamp limits and round to 1 decimal
-        score = round(max(15, min(100, score)), 1)
-        
-        # Status Label Matrix
-        if score >= 80: status = "EXCELLENT"
-        elif score >= 55: status = "NOMINAL"
-        elif score >= 35: status = "DEGRADED"
-        elif score >= 20: status = "CRITICAL"
-        else: status = "EXHAUSTED"
-        
+        if recovery > 0:
+            score += recovery
+            penalties.append(f"Recovery: +{recovery}")
+
+        # ── 6. Post-Lunch Circadian Dip (13:00-15:30) ──
+        if 780 <= now_m <= 930:  # 13:00-15:30
+            dip = 8
+            score -= dip
+            penalties.append(f"Afternoon Dip: -{dip}")
+
+        # ── 7. Post-Meal Metabolic Dip ──
+        for t in day_tasks:
+            if t.get('type') != "meal":
+                continue
+            act = t.get('activity', '').lower()
+            meal_start = self._time_to_minutes(t['start_time'])
+            meal_end = meal_start + t.get('duration', 0)
+            # Only apply if meal has ENDED
+            if meal_end > now_m:
+                continue
+            if "lunch" in act and now_m < meal_end + 90:
+                score -= 15
+                penalties.append("Post-Lunch Dip: -15")
+            elif "dinner" in act and now_m < meal_end + 60:
+                score -= 8
+                penalties.append("Post-Dinner Dip: -8")
+
+        # Clamp and round
+        score = round(max(15.0, min(100.0, score)), 1)
+
+        # Status label
+        if score >= 80:
+            status = "EXCELLENT"
+        elif score >= 55:
+            status = "NOMINAL"
+        elif score >= 35:
+            status = "DEGRADED"
+        elif score >= 20:
+            status = "CRITICAL"
+        else:
+            status = "EXHAUSTED"
+
         return {"score": score, "status": status, "penalties": penalties}
+
     def adjust_sleep_if_awake(self) -> bool:
         """
         Shifts Sleep time to 10 mins from now if the user interacts with the terminal during scheduled Sleep.

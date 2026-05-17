@@ -379,7 +379,7 @@ class TaskItem(QWidget):
         lay.setSpacing(8)
 
         # Checkbox button
-        self._chk = QPushButton("✓" if self._done else "○")
+        self._chk = QPushButton("[x]" if self._done else "[ ]")
         self._chk.setFixedSize(22, 22)
         self._chk.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._chk.clicked.connect(self._on_check)
@@ -412,13 +412,13 @@ class TaskItem(QWidget):
         # Deadline badge
         dl = task.get("deadline", "")
         if dl:
-            dl_lbl = QLabel(f"⚑ {dl[:10]}")
+            dl_lbl = QLabel(f"{dl[:10]}")
             dl_lbl.setFont(font_mono(9))
             dl_lbl.setStyleSheet(f"color: {C_GOLD}; background: transparent; padding: 0 4px;")
             lay.addWidget(dl_lbl)
 
         # Delete button
-        del_btn = QPushButton("✕")
+        del_btn = QPushButton("X")
         del_btn.setFixedSize(20, 20)
         del_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         del_btn.setStyleSheet(f"""
@@ -446,7 +446,7 @@ class TaskItem(QWidget):
 
     def _on_check(self):
         self._done = not self._done
-        self._chk.setText("✓" if self._done else "○")
+        self._chk.setText("[x]" if self._done else "[ ]")
         self._update_chk_style()
         col = C_TEXT_DIM if self._done else C_TEXT_BRIGHT
         self._name.setStyleSheet(f"color: {col}; background: transparent;")
@@ -493,7 +493,7 @@ class ReminderItem(QWidget):
         lay.addWidget(t_body, 1)
 
         # Dismiss button
-        dis = QPushButton("✕")
+        dis = QPushButton("X")
         dis.setFixedSize(20, 20)
         dis.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         dis.setStyleSheet(f"""

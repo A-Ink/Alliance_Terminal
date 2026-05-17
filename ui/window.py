@@ -102,14 +102,14 @@ class TitleBar(QWidget):
 
     def _ctrl_btn(self, text: str, tip: str) -> QPushButton:
         btn = QPushButton(text)
-        btn.setFont(font_body(10))
-        btn.setFixedSize(28, 24)
+        btn.setFont(font_body(13))
+        btn.setFixedSize(32, 28)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setToolTip(tip)
         btn.setStyleSheet(f"""
-            QPushButton{{background:transparent; color:{C_TEXT_DIM}; border:none;
-                         font-family:{S_MONTSERRAT}; font-size:10px; font-weight:bold;}}
-            QPushButton:hover{{color:{C_CYAN}; background:rgba(0,229,255,0.10);}}
+            QPushButton{{background:transparent; color:{C_TEXT}; border:none;
+                         font-family: 'Segoe UI Symbol', {S_MONTSERRAT}; font-size:14px; font-weight:bold;}}
+            QPushButton:hover{{color:{C_CYAN}; background:rgba(0,229,255,0.12);}}
         """)
         return btn
 
@@ -148,12 +148,8 @@ class TitleBar(QWidget):
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        p.setPen(QColor(0, 180, 200, 120))
-        p.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
-        p.end()
+        # No bottom border — seamless transition to content
+        pass
 
 
 class PipelineStatusBar(QWidget):
@@ -286,13 +282,6 @@ class AllianceTerminal(QWidget):
         self._titlebar.open_help.connect(self._open_help)
         root.addWidget(self._titlebar)
 
-        # ── Pipeline status indicator ──
-        self._pipeline_bar = PipelineStatusBar()
-        root.addWidget(self._pipeline_bar)
-        # Set initial state based on loaded tier
-        if self._orchestrator:
-            self._pipeline_bar.set_state(self._orchestrator.active_tier)
-
         # ── Stacked widget: boot overlay | main content ──
         self._stack = QStackedWidget()
         root.addWidget(self._stack, 1)
@@ -380,6 +369,9 @@ class AllianceTerminal(QWidget):
         self._start_diagnostics()
         self._start_reminders()
         self._load_panel_data()
+        # Set initial pipeline tier in diagnostics
+        if self._orchestrator:
+            self._left_panel.update_pipeline_tier(self._orchestrator.active_tier)
         # Schedule sanity check on boot if dGPU is active
         if self._orchestrator and self._orchestrator.active_tier == "gpu":
             QTimer.singleShot(5000, self._run_schedule_sanity_check)

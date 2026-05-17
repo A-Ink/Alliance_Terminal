@@ -254,13 +254,23 @@ def main():
     # --- PHASE 2: UI INIT ---
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtCore import QTimer, Qt
+    from PyQt6.QtGui import QFont
     from ui.theme import load_fonts, global_stylesheet
     from ui.window import AllianceTerminal
     from power_manager import PowerMonitor, PipelineOrchestrator
-    
+
+    # Enable high-DPI scaling for crisp text and icons
+    os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
+
     app = QApplication(sys.argv)
     app.setApplicationName("Alliance Terminal Version 3")
     app.setOrganizationName("N7")
+
+    # Global font rendering: prefer full hinting for crispest text on Windows
+    default_font = app.font()
+    default_font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+    app.setFont(default_font)
 
     load_fonts()
     app.setStyleSheet(global_stylesheet())

@@ -75,14 +75,16 @@ class LeftPanel(QWidget):
         diag_hdr.setStyleSheet(f"color: {C_CYAN_DIM}; letter-spacing: 2px; background: transparent;")
         dp_lay.addWidget(diag_hdr)
 
-        self._row_sys  = DiagRow("SYS RAM")
-        self._row_app  = DiagRow("APP RAM")
+        self._row_sys   = DiagRow("SYS RAM")
+        self._row_app   = DiagRow("APP RAM")
         self._row_model = DiagRow("MODEL")
         self._row_dev   = DiagRow("DEVICE")
+        self._row_tier  = DiagRow("TIER")
         dp_lay.addWidget(self._row_sys)
         dp_lay.addWidget(self._row_app)
         dp_lay.addWidget(self._row_model)
         dp_lay.addWidget(self._row_dev)
+        dp_lay.addWidget(self._row_tier)
 
         self._spark = SparklineWidget()
         dp_lay.addWidget(self._spark)
@@ -169,6 +171,15 @@ class LeftPanel(QWidget):
         else:
             self._row_dev.set_value(device)
 
+    def update_pipeline_tier(self, tier: str):
+        """Update the TIER row: 'npu', 'gpu', or 'swapping'."""
+        if tier == "gpu":
+            self._row_tier.set_value("dGPU ACTIVE", C_GREEN)
+        elif tier == "swapping":
+            self._row_tier.set_value("SWAPPING...", C_GOLD)
+        else:
+            self._row_tier.set_value("NPU ACTIVE", C_CYAN)
+
     # ── Data updates ──
 
     def update_codex(self, html_or_text: str):
@@ -204,7 +215,7 @@ class LeftPanel(QWidget):
                 item.widget().deleteLater()
 
         if not reminders:
-            self._rems_lay.addWidget(_empty_state("No active reminders", "⏱"))
+            self._rems_lay.addWidget(_empty_state("No active reminders"))
             return
 
         for r in reminders:
@@ -222,10 +233,10 @@ class LeftPanel(QWidget):
 class ChatPanel(QWidget):
     message_sent = pyqtSignal(str)
 
-    COMMANDER = "◈  COMMANDER SHEPARD"
-    NORMANDY  = "◈  NORMANDY"
-    SYSTEM    = "●  SYSTEM"
-    REMINDER  = "⚑  ALERT"
+    COMMANDER = "COMMANDER SHEPARD"
+    NORMANDY  = "NORMANDY"
+    SYSTEM    = "SYSTEM"
+    REMINDER  = "ALERT"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -278,7 +289,7 @@ class ChatPanel(QWidget):
         ip_lay.setSpacing(6)
 
         input_hdr = QHBoxLayout()
-        cmd_lbl = QLabel("◈  COMMAND INPUT")
+        cmd_lbl = QLabel("COMMAND INPUT")
         cmd_lbl.setFont(font_orbitron(8, QFont.Weight.Bold))
         cmd_lbl.setStyleSheet(f"color: {C_CYAN_DIM}; letter-spacing: 2px; background: transparent;")
         input_hdr.addWidget(cmd_lbl)
@@ -337,7 +348,7 @@ class ChatPanel(QWidget):
         self._clear_btn.clicked.connect(self._clear_log)
         btn_row.addWidget(self._clear_btn)
 
-        self._send_btn = QPushButton("TRANSMIT  ◈")
+        self._send_btn = QPushButton("TRANSMIT")
         self._send_btn.setFont(font_orbitron(9, QFont.Weight.Bold))
         self._send_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._send_btn.setStyleSheet(f"""

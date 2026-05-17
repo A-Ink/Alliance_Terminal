@@ -198,7 +198,7 @@
     ],
     "2026-05-16": [
       {
-        "start_time": "11:50",
+        "start_time": "07:30",
         "duration": 15,
         "activity": "Wake (Biological Anchor)",
         "priority": 8,
@@ -249,7 +249,7 @@
       },
       {
         "start_time": "04:58",
-        "duration": 302,
+        "duration": 152,
         "activity": "Sleep",
         "priority": 9,
         "type": "sleep",
@@ -260,7 +260,7 @@
     ],
     "2026-05-17": [
       {
-        "start_time": "10:00",
+        "start_time": "00:00",
         "duration": 15,
         "activity": "Wake (Biological Anchor)",
         "priority": 8,
@@ -308,8 +308,17 @@
         "is_placeholder": true
       },
       {
+        "start_time": "21:00",
+        "duration": 60,
+        "activity": "Go to School",
+        "priority": 9,
+        "type": "task",
+        "deadline": "",
+        "completed": false
+      },
+      {
         "start_time": "23:00",
-        "duration": 420,
+        "duration": 60,
         "activity": "Sleep",
         "priority": 9,
         "type": "sleep",
@@ -381,7 +390,7 @@
       }
     ]
   },
-  "user_energy": 91,
+  "user_energy": 78,
   "tasks": [
     {
       "id": "003c052e",
@@ -426,6 +435,14 @@
       "text": "Pack Arduino USB cable",
       "reminder_text": "Pack Arduino USB cable",
       "remind_at": "08:30",
+      "date": "2026-05-17",
+      "dismissed": false
+    },
+    {
+      "id": "17a1d9af",
+      "text": "collect my earbud case later today",
+      "reminder_text": "collect my earbud case later today",
+      "remind_at": "17:00",
       "date": "2026-05-17",
       "dismissed": false
     }
